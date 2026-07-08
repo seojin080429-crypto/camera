@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>길안내 — 점자블록 & 가상 유도선</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --border: #1e1e2e;
+    --accent-safe: #00e5a0;
+    --accent-warn: #ff9f1c;
+    --accent-danger: #ff3b5c;
+    --accent-guide: #4fc3f7;
+    --text-primary: #f0f0f8;
+    --text-secondary: #8888aa;
+    --overlay-bg: rgba(10,10,15,0.88);
+    --font: 'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font);
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 카메라 뷰 ── */
+  #camera-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+  }
+  #video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(1);
+  }
+  #overlay-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  /* ── 상단 상태바 ── */
+  #statusbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 20;
+    background: var(--overlay-bg);
+    backdrop-filter: blur(12px);
+    padding: 12px 20px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  #status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent-safe);
+    box-shadow: 0 0 8px var(--accent-safe);
+    flex-shrink: 0;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  #status-dot.warn { background: var(--accent-warn); box-shadow: 0 0 8px var(--accent-warn); }
+  #status-dot.danger { background: var(--accent-danger); box-shadow: 0 0 8px var(--accent-danger); }
+
+  #status-text {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    flex: 1;
+    margin-left: 10px;
+  }
+  #mode-badge {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--accent-guide);
+    color: var(--accent-guide);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* ── 하단 피드백 패널 ── */
+  #feedback-panel {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 20;
+    background: var(--overlay-bg);
+    backdrop-filter: blur(16px);
+    border-top: 1px solid var(--border);
+    padding: 16px 20px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  #direction-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .dir-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 14px 8px;
+    border-radius: 16px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 24px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .dir-btn .label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .dir-btn.active-left {
+    border-color: var(--accent-warn);
+    color: var(--accent-warn);
+    background: rgba(255,159,28,0.12);
+    box-shadow: inset 0 0 20px rgba(255,159,28,0.1);
+  }
+  .dir-btn.active-right {
+    border-color: var(--accent-warn);
+    color: var(--accent-warn);
+    background: rgba(255,159,28,0.12);
+    box-shadow: inset 0 0 20px rgba(255,159,28,0.1);
+  }
+  .dir-btn.active-forward {
+    border-color: var(--accent-safe);
+    color: var(--accent-safe);
+    background: rgba(0,229,160,0.10);
+    box-shadow: inset 0 0 20px rgba(0,229,160,0.08);
+  }
+  .dir-btn.active-stop {
+    border-color: var(--accent-danger);
+    color: var(--accent-danger);
+    background: rgba(255,59,92,0.12);
+    box-shadow: inset 0 0 20px rgba(255,59,92,0.1);
+  }
+
+  #center-info {
+    flex: 1.4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+  #deviation-bar-wrap {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    overflow: hidden;
+    position: relative;
+  }
+  #deviation-bar {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 40%;
+    border-radius: 3px;
+    background: var(--accent-safe);
+    transition: left 0.15s, background 0.15s;
+    left: 30%;
+  }
+  #deviation-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── 컨트롤 바 ── */
+  #control-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  #start-btn {
+    flex: 1;
+    padding: 14px;
+    border-radius: 14px;
+    border: none;
+    background: var(--accent-guide);
+    color: #000;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  #start-btn:active { transform: scale(0.97); }
+  #start-btn.running {
+    background: var(--accent-danger);
+    color: #fff;
+  }
+
+  .icon-btn {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .icon-btn.active {
+    border-color: var(--accent-guide);
+    color: var(--accent-guide);
+    background: rgba(79,195,247,0.10);
+  }
+
+  /* ── 디버그 패널 ── */
+  #debug-panel {
+    position: fixed;
+    top: 60px; right: 12px;
+    z-index: 30;
+    background: rgba(10,10,15,0.92);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 160px;
+    display: none;
+    line-height: 1.8;
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+  }
+  #debug-panel.visible { display: block; }
+  #debug-panel span { color: var(--accent-guide); }
+
+  /* ── 장애물 경고 오버레이 ── */
+  #obstacle-flash {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    pointer-events: none;
+    opacity: 0;
+    border: 4px solid var(--accent-danger);
+    border-radius: 0;
+    transition: opacity 0.1s;
+    box-shadow: inset 0 0 60px rgba(255,59,92,0.3);
+  }
+  #obstacle-flash.show { opacity: 1; }
+
+  /* ── 초기 화면 ── */
+  #init-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 40px;
+    text-align: center;
+  }
+  #init-screen.hidden { display: none; }
+  .init-icon {
+    font-size: 72px;
+    line-height: 1;
+  }
+  .init-title {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+  .init-sub {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    max-width: 300px;
+  }
+  .init-features {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    max-width: 340px;
+    text-align: left;
+  }
+  .init-feature {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .init-feature-icon { font-size: 20px; flex-shrink: 0; }
+  #permission-btn {
+    width: 100%;
+    max-width: 340px;
+    padding: 18px;
+    border-radius: 16px;
+    border: none;
+    background: var(--accent-guide);
+    color: #000;
+    font-size: 16px;
+    font-weight: 800;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    transition: opacity 0.2s;
+  }
+
+  /* ── 진동 시각화 ── */
+  @keyframes pulse-left {
+    0%,100% { transform: translateX(0); }
+    30% { transform: translateX(-6px); }
+    60% { transform: translateX(-3px); }
+  }
+  @keyframes pulse-right {
+    0%,100% { transform: translateX(0); }
+    30% { transform: translateX(6px); }
+    60% { transform: translateX(3px); }
+  }
+  #feedback-panel.vib-left { animation: pulse-left 0.35s ease-in-out; }
+  #feedback-panel.vib-right { animation: pulse-right 0.35s ease-in-out; }
+</style>
+</head>
+<body>
+
+<!-- 초기 권한 화면 -->
+<div id="init-screen">
+  <div class="init-icon">🦯</div>
+  <div class="init-title">점자블록 & 가상 유도선</div>
+  <div class="init-sub">카메라로 보도를 분석해 진동·음성으로 실시간 방향을 안내합니다.</div>
+  <div class="init-features">
+    <div class="init-feature">
+      <span class="init-feature-icon">🟡</span>
+      <div>점자블록 인식 → 선 이탈 시 좌/우 진동</div>
+    </div>
+    <div class="init-feature">
+      <span class="init-feature-icon">🔵</span>
+      <div>블록 없는 구간 → 가상 유도선 자동 생성</div>
+    </div>
+    <div class="init-feature">
+      <span class="init-feature-icon">🔴</span>
+      <div>전방 장애물 감지 → 경고 진동 + 음성</div>
+    </div>
+    <div class="init-feature">
+      <span class="init-feature-icon">📳</span>
+      <div>핸드폰 진동 + 음성 합성으로 안내</div>
+    </div>
+  </div>
+  <button id="permission-btn" onclick="requestPermissions()">카메라 권한 허용 후 시작</button>
+</div>
+
+<!-- 카메라 + 오버레이 -->
+<div id="camera-layer">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay-canvas"></canvas>
+</div>
+
+<!-- 장애물 플래시 -->
+<div id="obstacle-flash"></div>
+
+<!-- 상단 상태바 -->
+<div id="statusbar">
+  <div id="status-dot"></div>
+  <div id="status-text">대기 중</div>
+  <div id="mode-badge">STANDBY</div>
+</div>
+
+<!-- 디버그 패널 -->
+<div id="debug-panel">
+  FPS: <span id="d-fps">0</span><br>
+  이탈량: <span id="d-dev">0</span>px<br>
+  모드: <span id="d-mode">-</span><br>
+  블록감지: <span id="d-block">-</span><br>
+  장애물: <span id="d-obs">없음</span>
+</div>
+
+<!-- 하단 피드백 패널 -->
+<div id="feedback-panel">
+  <div id="direction-row">
+    <button class="dir-btn" id="btn-left">
+      ◀
+      <span class="label">왼쪽</span>
+    </button>
+    <div id="center-info">
+      <div id="deviation-bar-wrap">
+        <div id="deviation-bar"></div>
+      </div>
+      <div id="deviation-label">경로 중심</div>
+    </div>
+    <button class="dir-btn" id="btn-right">
+      ▶
+      <span class="label">오른쪽</span>
+    </button>
+  </div>
+  <div id="control-row">
+    <button class="icon-btn" id="debug-toggle-btn" onclick="toggleDebug()" title="디버그">🔍</button>
+    <button id="start-btn" onclick="toggleNavigation()">안내 시작</button>
+    <button class="icon-btn" id="voice-btn" onclick="toggleVoice()" title="음성">🔊</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  상태
+// ═══════════════════════════════════════════════════════
+const state = {
+  running: false,
+  voiceOn: true,
+  debugOn: false,
+  mode: 'standby',          // 'standby' | 'braille' | 'virtual' | 'obstacle'
+  deviation: 0,             // -1.0 ~ +1.0 (음수=왼쪽, 양수=오른쪽)
+  obstacleDetected: false,
+  lastVibTime: 0,
+  lastSpeakTime: 0,
+  fps: 0,
+  frameCount: 0,
+  lastFpsTime: performance.now(),
+  animId: null,
+  stream: null,
+};
+
+// ═══════════════════════════════════════════════════════
+//  DOM 참조
+// ═══════════════════════════════════════════════════════
+const video      = document.getElementById('video');
+const canvas     = document.getElementById('overlay-canvas');
+const ctx        = canvas.getContext('2d', { willReadFrequently: true });
+const statusDot  = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
+const modeBadge  = document.getElementById('mode-badge');
+const startBtn   = document.getElementById('start-btn');
+const devBar     = document.getElementById('deviation-bar');
+const devLabel   = document.getElementById('deviation-label');
+const btnLeft    = document.getElementById('btn-left');
+const btnRight   = document.getElementById('btn-right');
+const obsFlash   = document.getElementById('obstacle-flash');
+const feedPanel  = document.getElementById('feedback-panel');
+
+// ═══════════════════════════════════════════════════════
+//  권한 요청 & 카메라 시작
+// ═══════════════════════════════════════════════════════
+async function requestPermissions() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    });
+    state.stream = stream;
+    video.srcObject = stream;
+    await video.play();
+    document.getElementById('init-screen').classList.add('hidden');
+    resizeCanvas();
+  } catch(e) {
+    alert('카메라 접근 실패: ' + e.message);
+  }
+}
+
+function resizeCanvas() {
+  canvas.width  = video.videoWidth  || window.innerWidth;
+  canvas.height = video.videoHeight || window.innerHeight;
+}
+
+window.addEventListener('resize', resizeCanvas);
+video.addEventListener('loadedmetadata', resizeCanvas);
+
+// ═══════════════════════════════════════════════════════
+//  메인 루프
+// ═══════════════════════════════════════════════════════
+function toggleNavigation() {
+  if (!state.stream) { alert('먼저 카메라 권한을 허용해주세요.'); return; }
+  state.running = !state.running;
+  startBtn.textContent = state.running ? '안내 중지' : '안내 시작';
+  startBtn.classList.toggle('running', state.running);
+
+  if (state.running) {
+    speak('안내를 시작합니다.');
+    loop();
+  } else {
+    cancelAnimationFrame(state.animId);
+    state.mode = 'standby';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    updateUI();
+  }
+}
+
+function loop() {
+  if (!state.running) return;
+  analyze();
+  state.animId = requestAnimationFrame(loop);
+
+  // FPS 계산
+  state.frameCount++;
+  const now = performance.now();
+  if (now - state.lastFpsTime >= 1000) {
+    state.fps = state.frameCount;
+    state.frameCount = 0;
+    state.lastFpsTime = now;
+    document.getElementById('d-fps').textContent = state.fps;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  핵심 분석 엔진
+// ═══════════════════════════════════════════════════════
+function analyze() {
+  const W = canvas.width, H = canvas.height;
+  if (!W || !H) return;
+
+  // 1. 비디오 프레임을 캔버스에 그림
+  ctx.drawImage(video, 0, 0, W, H);
+  const imageData = ctx.getImageData(0, 0, W, H);
+  const pixels = imageData.data;
+
+  // ── ROI: 하단 60% (보도가 주로 여기 있음)
+  const roiTop = Math.floor(H * 0.35);
+  const roiH   = H - roiTop;
+
+  // 2. 점자블록 감지 (노란색/황토색 계열)
+  const brailleResult = detectBrailleBlock(pixels, W, H, roiTop);
+
+  // 3. 보행 가능 영역 세그멘테이션 (밝고 평탄한 노면)
+  const walkableResult = detectWalkablePath(pixels, W, H, roiTop);
+
+  // 4. 전방 장애물 감지 (상단 30% 에서 급격한 엣지)
+  const obstacleResult = detectObstacle(pixels, W, H);
+
+  // 5. 모드 결정 & 유도선 계산
+  let deviation = 0;
+  let mode = 'virtual';
+
+  if (obstacleResult.detected) {
+    mode = 'obstacle';
+    deviation = 0;
+  } else if (brailleResult.detected && brailleResult.confidence > 0.3) {
+    mode = 'braille';
+    deviation = brailleResult.deviation;
+  } else {
+    mode = 'virtual';
+    deviation = walkableResult.deviation;
+  }
+
+  state.mode = mode;
+  state.deviation = deviation;
+  state.obstacleDetected = obstacleResult.detected;
+
+  // 6. 오버레이 그리기
+  drawOverlay(ctx, W, H, roiTop, brailleResult, walkableResult, obstacleResult, mode, deviation);
+
+  // 7. 피드백 출력
+  provideFeedback(mode, deviation, obstacleResult);
+  updateUI();
+
+  // 디버그
+  document.getElementById('d-dev').textContent   = (deviation * 100).toFixed(1) + '%';
+  document.getElementById('d-mode').textContent  = mode;
+  document.getElementById('d-block').textContent = brailleResult.detected
+    ? `감지 (${(brailleResult.confidence*100).toFixed(0)}%)`
+    : '없음';
+  document.getElementById('d-obs').textContent   = obstacleResult.detected ? '⚠️ 감지' : '없음';
+}
+
+// ═══════════════════════════════════════════════════════
+//  점자블록 감지
+//  노란/황토 계열 픽셀을 찾고, x축 분포의 무게중심 계산
+// ═══════════════════════════════════════════════════════
+function detectBrailleBlock(pixels, W, H, roiTop) {
+  let totalWeight = 0;
+  let weightedX   = 0;
+  let count = 0;
+
+  // 샘플링 간격 (성능)
+  const step = 4;
+
+  for (let y = roiTop; y < H; y += step) {
+    for (let x = 0; x < W; x += step) {
+      const i = (y * W + x) * 4;
+      const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+
+      if (isYellowBraille(r, g, b)) {
+        // 가까운 행(아래쪽)에 더 높은 가중치
+        const weight = 1 + (y - roiTop) / (H - roiTop);
+        totalWeight += weight;
+        weightedX   += x * weight;
+        count++;
+      }
+    }
+  }
+
+  const roiArea = ((H - roiTop) / step) * (W / step);
+  const density = count / roiArea;
+  const detected = density > 0.015;   // 1.5% 이상 픽셀이면 감지
+
+  let deviation = 0;
+  if (detected && totalWeight > 0) {
+    const cx = weightedX / totalWeight;
+    deviation = (cx / W - 0.5) * 2;   // -1 ~ +1
+  }
+
+  return { detected, confidence: Math.min(density / 0.06, 1), deviation, count };
+}
+
+function isYellowBraille(r, g, b) {
+  // HSV 기반 노란-황토 범위 (조명 변화에 어느 정도 강인)
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max < 80) return false;          // 너무 어두운 건 제외
+  const s = max === 0 ? 0 : (max - min) / max;
+  if (s < 0.25) return false;          // 채도가 낮으면 제외
+
+  // R이 G보다 크고, G가 B보다 많이 큰 = 노란/주황
+  return r > 120 && g > 90 && b < g * 0.8 && r >= g * 0.75 && g > b + 30;
+}
+
+// ═══════════════════════════════════════════════════════
+//  보행 가능 영역 세그멘테이션
+//  밝고 균일한 노면(콘크리트/아스팔트)을 찾아 centerline 추정
+// ═══════════════════════════════════════════════════════
+function detectWalkablePath(pixels, W, H, roiTop) {
+  // 수평 슬라이스별로 "걸을 수 있는" x 범위를 찾음
+  const slices = 8;
+  const sliceH = Math.floor((H - roiTop) / slices);
+  const walkableSlices = [];
+
+  for (let s = 0; s < slices; s++) {
+    const y = roiTop + s * sliceH + Math.floor(sliceH / 2);
+    let leftEdge = -1, rightEdge = W;
+
+    // 왼쪽 → 오른쪽: 걷기 어려운 영역(너무 어둡거나 엣지가 강한) 검출
+    for (let x = 0; x < W; x++) {
+      if (isWalkable(pixels, x, y, W)) { leftEdge = x; break; }
+    }
+    for (let x = W - 1; x >= 0; x--) {
+      if (isWalkable(pixels, x, y, W)) { rightEdge = x; break; }
+    }
+
+    if (leftEdge === -1) leftEdge = 0;
+    walkableSlices.push({ y, leftEdge, rightEdge, cx: (leftEdge + rightEdge) / 2 });
+  }
+
+  // 하단 3개 슬라이스의 평균 중심을 현재 기준으로 삼음
+  const recent = walkableSlices.slice(-3);
+  const avgCx = recent.reduce((s, r) => s + r.cx, 0) / recent.length;
+  const deviation = (avgCx / W - 0.5) * 2;
+
+  return { walkableSlices, deviation, avgCx };
+}
+
+function isWalkable(pixels, x, y, W) {
+  const i = (y * W + x) * 4;
+  const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+  const brightness = (r + g + b) / 3;
+  // 콘크리트/아스팔트: 밝기 60~220, 낮은 채도
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const saturation = max === 0 ? 0 : (max - min) / max;
+  return brightness > 50 && brightness < 230 && saturation < 0.35;
+}
+
+// ═══════════════════════════════════════════════════════
+//  장애물 감지
+//  전방 중앙 영역의 급격한 밝기/엣지 변화를 감지
+// ═══════════════════════════════════════════════════════
+function detectObstacle(pixels, W, H) {
+  // 전방(화면 상단 20%~45%)의 중앙 50%를 검사
+  const startY = Math.floor(H * 0.20);
+  const endY   = Math.floor(H * 0.45);
+  const startX = Math.floor(W * 0.25);
+  const endX   = Math.floor(W * 0.75);
+
+  let edgeSum = 0;
+  let samples = 0;
+  const step = 6;
+
+  for (let y = startY; y < endY - step; y += step) {
+    for (let x = startX; x < endX; x += step) {
+      const i = (y * W + x) * 4;
+      const j = ((y + step) * W + x) * 4;
+      const b1 = (pixels[i] + pixels[i+1] + pixels[i+2]) / 3;
+      const b2 = (pixels[j] + pixels[j+1] + pixels[j+2]) / 3;
+      edgeSum += Math.abs(b1 - b2);
+      samples++;
+    }
+  }
+
+  const avgEdge = samples > 0 ? edgeSum / samples : 0;
+  const detected = avgEdge > 38;   // 임계값 (튜닝 가능)
+
+  return { detected, intensity: avgEdge };
+}
+
+// ═══════════════════════════════════════════════════════
+//  오버레이 그리기
+// ═══════════════════════════════════════════════════════
+function drawOverlay(ctx, W, H, roiTop, braille, walkable, obstacle, mode, deviation) {
+  ctx.clearRect(0, 0, W, H); // 기존 오버레이 지우기 (비디오는 매 프레임 재드로우됨)
+
+  // 다시 비디오 프레임 그리기
+  ctx.drawImage(video, 0, 0, W, H);
+
+  // ── 점자블록 하이라이트
+  if (braille.detected) {
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    // (실제 픽셀 단위 마스크 대신 전체 영역 틴트)
+    ctx.fillStyle = '#ffcc00';
+    // 실제로는 픽셀마다 칠하면 느리므로 간단한 glow만
+    ctx.globalAlpha = 0.15;
+    ctx.fillRect(0, roiTop, W, H - roiTop);
+    ctx.restore();
+  }
+
+  // ── 가상 유도선 그리기
+  if (mode === 'braille' || mode === 'virtual') {
+    drawGuideLine(ctx, W, H, roiTop, walkable, mode, deviation);
+  }
+
+  // ── ROI 경계
+  ctx.save();
+  ctx.strokeStyle = 'rgba(79,195,247,0.25)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([8, 8]);
+  ctx.beginPath();
+  ctx.moveTo(0, roiTop);
+  ctx.lineTo(W, roiTop);
+  ctx.stroke();
+  ctx.restore();
+
+  // ── 장애물 경고 박스
+  if (obstacle.detected) {
+    const ox = W * 0.25, oy = H * 0.20;
+    const ow = W * 0.50, oh = H * 0.25;
+    ctx.save();
+    ctx.strokeStyle = '#ff3b5c';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#ff3b5c';
+    ctx.shadowBlur = 12;
+    ctx.strokeRect(ox, oy, ow, oh);
+    ctx.fillStyle = 'rgba(255,59,92,0.12)';
+    ctx.fillRect(ox, oy, ow, oh);
+
+    ctx.fillStyle = '#ff3b5c';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 0;
+    ctx.fillText('⚠ 전방 주의', ox + ow/2, oy - 8);
+    ctx.restore();
+  }
+
+  // ── 이탈 표시 (중앙선에서 현재 위치)
+  const indicatorX = W/2 + deviation * W/2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(indicatorX, H - 40, 8, 0, Math.PI * 2);
+  const devColor = Math.abs(deviation) < 0.2 ? '#00e5a0'
+                 : Math.abs(deviation) < 0.5 ? '#ff9f1c' : '#ff3b5c';
+  ctx.fillStyle = devColor;
+  ctx.shadowColor = devColor;
+  ctx.shadowBlur = 12;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawGuideLine(ctx, W, H, roiTop, walkable, mode, deviation) {
+  // 슬라이스별 중심점을 연결한 곡선 유도선
+  const pts = walkable.walkableSlices.map(s => ({ x: s.cx, y: s.y }));
+  if (pts.length < 2) return;
+
+  const color = mode === 'braille' ? '#ffcc00' : '#4fc3f7';
+  const alpha = mode === 'braille' ? 0.85 : 0.7;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 5;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 16;
+  ctx.globalAlpha = alpha;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.setLineDash(mode === 'virtual' ? [16, 10] : []);
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i-1], curr = pts[i];
+    const cpx = (prev.x + curr.x) / 2;
+    const cpy = (prev.y + curr.y) / 2;
+    ctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
+  }
+  ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+  ctx.stroke();
+
+  // 중심선 (흰색 얇은 선)
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(W/2, roiTop);
+  ctx.lineTo(W/2, H);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+//  피드백 (진동 + 음성)
+// ═══════════════════════════════════════════════════════
+function provideFeedback(mode, deviation, obstacle) {
+  const now = Date.now();
+
+  if (mode === 'obstacle') {
+    // 장애물: 더블 진동 + 음성 (1초마다)
+    if (now - state.lastVibTime > 1000) {
+      vibrate([200, 100, 200]);
+      state.lastVibTime = now;
+    }
+    if (now - state.lastSpeakTime > 2500) {
+      speak('전방 장애물 주의');
+      state.lastSpeakTime = now;
+    }
+    obsFlash.classList.add('show');
+    return;
+  }
+
+  obsFlash.classList.remove('show');
+
+  const absD = Math.abs(deviation);
+
+  if (absD < 0.15) {
+    // 정상 경로: 진동 없음
+    if (now - state.lastSpeakTime > 8000) {
+      speak(mode === 'braille' ? '점자블록을 따라 직진' : '가상 유도선 직진');
+      state.lastSpeakTime = now;
+    }
+    return;
+  }
+
+  // 이탈 감지
+  const dir    = deviation > 0 ? 'right' : 'left';
+  const severe = absD > 0.5;
+
+  // 진동 간격: 심할수록 짧게
+  const vibInterval = severe ? 500 : 900;
+  if (now - state.lastVibTime > vibInterval) {
+    if (severe) {
+      vibrate(dir === 'left' ? [150, 80, 150] : [80, 150, 80, 150, 80]);
+    } else {
+      vibrate(dir === 'left' ? [120] : [80, 60, 80]);
+    }
+    state.lastVibTime = now;
+  }
+
+  // 음성 안내 (2초마다)
+  if (now - state.lastSpeakTime > 2000) {
+    speak(deviation < 0 ? '왼쪽으로 치우침' : '오른쪽으로 치우침');
+    state.lastSpeakTime = now;
+  }
+}
+
+function vibrate(pattern) {
+  if ('vibrate' in navigator) {
+    navigator.vibrate(pattern);
+  }
+  // 시각 피드백 (테스트용)
+  const dir = Array.isArray(pattern) && pattern.length > 2 ? 'left' : 'right';
+  feedPanel.classList.remove('vib-left', 'vib-right');
+  void feedPanel.offsetWidth;
+  feedPanel.classList.add(dir === 'left' ? 'vib-left' : 'vib-right');
+}
+
+const synth = window.speechSynthesis;
+let currentUtterance = null;
+
+function speak(text) {
+  if (!state.voiceOn) return;
+  if (synth.speaking) synth.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = 'ko-KR';
+  utt.rate = 1.3;
+  utt.pitch = 1;
+  utt.volume = 1;
+  synth.speak(utt);
+  currentUtterance = utt;
+}
+
+// ═══════════════════════════════════════════════════════
+//  UI 업데이트
+// ═══════════════════════════════════════════════════════
+function updateUI() {
+  const { mode, deviation, obstacleDetected } = state;
+  const absD = Math.abs(deviation);
+
+  // 상태 닷
+  statusDot.className = 'status-dot';
+  if (mode === 'obstacle' || obstacleDetected) {
+    statusDot.classList.add('danger');
+  } else if (absD > 0.25) {
+    statusDot.classList.add('warn');
+  }
+
+  // 텍스트
+  const modeLabels = {
+    standby: '대기 중',
+    braille: absD < 0.15 ? '점자블록 직진' : (deviation < 0 ? '왼쪽 치우침 — 우측으로' : '오른쪽 치우침 — 좌측으로'),
+    virtual: absD < 0.15 ? '가상 유도선 직진' : (deviation < 0 ? '왼쪽 이탈 — 우측으로' : '오른쪽 이탈 — 좌측으로'),
+    obstacle: '⚠ 전방 장애물 감지',
+  };
+  statusText.textContent = modeLabels[mode] || '분석 중';
+
+  const badgeLabels = { standby: 'STANDBY', braille: 'BRAILLE', virtual: 'VIRTUAL', obstacle: 'OBSTACLE' };
+  modeBadge.textContent = badgeLabels[mode] || mode.toUpperCase();
+
+  // 이탈 바 (중앙 = 50%, 이탈 시 이동)
+  const barPercent = 30 + deviation * 40;  // 30~70% 범위에서 움직임
+  const barColor = absD < 0.15 ? 'var(--accent-safe)'
+                 : absD < 0.4  ? 'var(--accent-warn)'
+                 :               'var(--accent-danger)';
+  devBar.style.left = `${Math.max(0, Math.min(60, barPercent))}%`;
+  devBar.style.background = barColor;
+  devLabel.textContent = absD < 0.12 ? '경로 중심' : (deviation < 0 ? '← 왼쪽 이탈' : '오른쪽 이탈 →');
+
+  // 방향 버튼
+  btnLeft.className  = 'dir-btn';
+  btnRight.className = 'dir-btn';
+  if (mode === 'obstacle') {
+    btnLeft.classList.add('active-stop');
+    btnRight.classList.add('active-stop');
+  } else if (deviation < -0.15) {
+    btnLeft.classList.add('active-left');
+  } else if (deviation > 0.15) {
+    btnRight.classList.add('active-right');
+  } else {
+    btnLeft.classList.add('active-forward');
+    btnRight.classList.add('active-forward');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  토글 함수들
+// ═══════════════════════════════════════════════════════
+function toggleDebug() {
+  state.debugOn = !state.debugOn;
+  document.getElementById('debug-panel').classList.toggle('visible', state.debugOn);
+  document.getElementById('debug-toggle-btn').classList.toggle('active', state.debugOn);
+}
+
+function toggleVoice() {
+  state.voiceOn = !state.voiceOn;
+  document.getElementById('voice-btn').textContent = state.voiceOn ? '🔊' : '🔇';
+  document.getElementById('voice-btn').classList.toggle('active', state.voiceOn);
+  if (state.voiceOn) speak('음성 안내 켜짐');
+  else synth.cancel();
+}
+
+// 초기 음성 설정
+document.getElementById('voice-btn').classList.add('active');
+</script>
+</body>
+</html>
