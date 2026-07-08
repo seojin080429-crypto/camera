@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#0a0a0f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>길안내 — 점자블록 & 가상 유도선</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <style>
   :root {
     --bg: #0a0a0f;
@@ -394,6 +396,15 @@
   <div id="status-text">대기 중</div>
   <div id="mode-badge">STANDBY</div>
 </div>
+<!-- 모델 로딩 상태 -->
+<div id="model-status-bar" style="
+  position:fixed; top:52px; left:0; right:0; z-index:19;
+  background:rgba(79,195,247,0.12); border-bottom:1px solid rgba(79,195,247,0.2);
+  padding:5px 20px; font-size:12px; color:#4fc3f7; font-weight:600;
+  text-align:center; display:none;
+">
+  <span id="model-status"></span>
+</div>
 
 <!-- 디버그 패널 -->
 <div id="debug-panel">
@@ -447,6 +458,12 @@ const state = {
   lastFpsTime: performance.now(),
   animId: null,
   stream: null,
+  // AI 모델
+  cocoModel: null,
+  modelLoading: false,
+  modelReady: false,
+  lastDetections: [],       // 마지막 COCO-SSD 결과 캐시
+  detectionFrameCount: 0,   // AI는 매 N프레임마다만 실행
 };
 
 // ═══════════════════════════════════════════════════════
@@ -484,9 +501,35 @@ async function requestPermissions() {
     await video.play();
     document.getElementById('init-screen').classList.add('hidden');
     resizeCanvas();
+    // 백그라운드에서 모델 로드 시작
+    loadCocoModel();
   } catch(e) {
     alert('카메라 접근 실패: ' + e.message);
   }
+}
+
+async function loadCocoModel() {
+  if (state.modelLoading || state.modelReady) return;
+  state.modelLoading = true;
+  updateModelStatus('AI 모델 로딩 중…');
+  try {
+    state.cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    state.modelReady = true;
+    state.modelLoading = false;
+    updateModelStatus('AI 준비 완료 ✓');
+    setTimeout(() => updateModelStatus(''), 2000);
+  } catch(e) {
+    state.modelLoading = false;
+    updateModelStatus('AI 로드 실패 — 기본 감지 사용');
+    console.warn('COCO-SSD 로드 실패:', e);
+  }
+}
+
+function updateModelStatus(msg) {
+  const el  = document.getElementById('model-status');
+  const bar = document.getElementById('model-status-bar');
+  if (el)  el.textContent  = msg;
+  if (bar) bar.style.display = msg ? 'block' : 'none';
 }
 
 function resizeCanvas() {
@@ -545,20 +588,24 @@ function analyze() {
   const imageData = ctx.getImageData(0, 0, W, H);
   const pixels = imageData.data;
 
-  // ── ROI: 하단 60% (보도가 주로 여기 있음)
+  // ── ROI: 하단 60%
   const roiTop = Math.floor(H * 0.35);
-  const roiH   = H - roiTop;
 
-  // 2. 점자블록 감지 (노란색/황토색 계열)
+  // 2. 점자블록 감지
   const brailleResult = detectBrailleBlock(pixels, W, H, roiTop);
 
-  // 3. 보행 가능 영역 세그멘테이션 (밝고 평탄한 노면)
+  // 3. 보행 가능 영역
   const walkableResult = detectWalkablePath(pixels, W, H, roiTop);
 
-  // 4. 전방 장애물 감지 (상단 30% 에서 급격한 엣지)
-  const obstacleResult = detectObstacle(pixels, W, H);
+  // 4. 장애물 감지 (AI 우선, 없으면 픽셀 기반)
+  state.detectionFrameCount++;
+  if (state.modelReady && state.detectionFrameCount % 5 === 0) {
+    // 비동기 추론 — 결과는 다음 프레임에 반영
+    runAIDetection();
+  }
+  const obstacleResult = buildObstacleResult(pixels, W, H);
 
-  // 5. 모드 결정 & 유도선 계산
+  // 5. 모드 결정
   let deviation = 0;
   let mode = 'virtual';
 
@@ -580,17 +627,82 @@ function analyze() {
   // 6. 오버레이 그리기
   drawOverlay(ctx, W, H, roiTop, brailleResult, walkableResult, obstacleResult, mode, deviation);
 
-  // 7. 피드백 출력
+  // 7. 피드백
   provideFeedback(mode, deviation, obstacleResult);
   updateUI();
 
   // 디버그
-  document.getElementById('d-dev').textContent   = (deviation * 100).toFixed(1) + '%';
-  document.getElementById('d-mode').textContent  = mode;
-  document.getElementById('d-block').textContent = brailleResult.detected
-    ? `감지 (${(brailleResult.confidence*100).toFixed(0)}%)`
+  const obsLabel = obstacleResult.detected
+    ? `⚠️ ${obstacleResult.labels ? obstacleResult.labels.join(', ') : '감지'}`
     : '없음';
-  document.getElementById('d-obs').textContent   = obstacleResult.detected ? '⚠️ 감지' : '없음';
+  document.getElementById('d-dev').textContent   = (deviation * 100).toFixed(1) + '%';
+  document.getElementById('d-mode').textContent  = mode + (state.modelReady ? ' [AI]' : ' [픽셀]');
+  document.getElementById('d-block').textContent = brailleResult.detected
+    ? `감지 (${(brailleResult.confidence*100).toFixed(0)}%)` : '없음';
+  document.getElementById('d-obs').textContent   = obsLabel;
+}
+
+// AI 비동기 추론 (결과를 state.lastDetections에 저장)
+async function runAIDetection() {
+  if (!state.modelReady || !state.cocoModel) return;
+  try {
+    const predictions = await state.cocoModel.detect(video);
+    state.lastDetections = predictions;
+  } catch(e) {
+    // 추론 실패는 무시
+  }
+}
+
+// 장애물 결과 합산 (AI 캐시 + 픽셀 폴백)
+function buildObstacleResult(pixels, W, H) {
+  // COCO-SSD 위험 클래스 (보행자 관점)
+  const dangerClasses = new Set([
+    'person','bicycle','car','motorcycle','bus','truck',
+    'traffic light','stop sign','dog','cat','bird',
+    'backpack','suitcase','handbag','umbrella'
+  ]);
+
+  // AI 결과 처리
+  if (state.modelReady && state.lastDetections.length > 0) {
+    const W = canvas.width, H = canvas.height;
+    const centerX1 = W * 0.15, centerX2 = W * 0.85;
+    const centerY2 = H * 0.75;  // 화면 상단 75% 안에 있는 것만
+
+    const dangers = state.lastDetections.filter(d => {
+      if (!dangerClasses.has(d.class)) return false;
+      if (d.score < 0.45) return false;
+      // 중앙 영역에 있는지 확인
+      const [bx, by, bw, bh] = d.bbox;
+      const cx = bx + bw / 2;
+      return cx > centerX1 && cx < centerX2 && by < centerY2;
+    });
+
+    if (dangers.length > 0) {
+      return {
+        detected: true,
+        source: 'ai',
+        labels: dangers.map(d => `${translateClass(d.class)}(${(d.score*100).toFixed(0)}%)`),
+        detections: dangers,
+      };
+    }
+    // AI가 아무것도 못 찾으면 픽셀 폴백 안 씀 (오탐 줄이기)
+    return { detected: false, source: 'ai', labels: [], detections: [] };
+  }
+
+  // 모델 없을 때만 픽셀 기반 폴백
+  const px = detectObstaclePixel(pixels, W, H);
+  return { detected: px.detected, source: 'pixel', labels: px.detected ? ['물체'] : [], detections: [] };
+}
+
+// 한국어 클래스명
+function translateClass(cls) {
+  const map = {
+    person:'사람', bicycle:'자전거', car:'자동차', motorcycle:'오토바이',
+    bus:'버스', truck:'트럭', 'traffic light':'신호등', 'stop sign':'정지표지',
+    dog:'개', cat:'고양이', bird:'새', backpack:'가방', suitcase:'캐리어',
+    handbag:'핸드백', umbrella:'우산',
+  };
+  return map[cls] || cls;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -690,11 +802,9 @@ function isWalkable(pixels, x, y, W) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  장애물 감지
-//  전방 중앙 영역의 급격한 밝기/엣지 변화를 감지
+//  장애물 감지 — 픽셀 기반 폴백 (AI 없을 때만 사용)
 // ═══════════════════════════════════════════════════════
-function detectObstacle(pixels, W, H) {
-  // 전방(화면 상단 20%~45%)의 중앙 50%를 검사
+function detectObstaclePixel(pixels, W, H) {
   const startY = Math.floor(H * 0.20);
   const endY   = Math.floor(H * 0.45);
   const startX = Math.floor(W * 0.25);
@@ -716,9 +826,7 @@ function detectObstacle(pixels, W, H) {
   }
 
   const avgEdge = samples > 0 ? edgeSum / samples : 0;
-  const detected = avgEdge > 38;   // 임계값 (튜닝 가능)
-
-  return { detected, intensity: avgEdge };
+  return { detected: avgEdge > 38, intensity: avgEdge };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -758,24 +866,50 @@ function drawOverlay(ctx, W, H, roiTop, braille, walkable, obstacle, mode, devia
   ctx.stroke();
   ctx.restore();
 
-  // ── 장애물 경고 박스
+  // ── 장애물 경고 박스 (AI 바운딩 박스 or 픽셀 기반)
   if (obstacle.detected) {
-    const ox = W * 0.25, oy = H * 0.20;
-    const ow = W * 0.50, oh = H * 0.25;
     ctx.save();
-    ctx.strokeStyle = '#ff3b5c';
-    ctx.lineWidth = 3;
-    ctx.shadowColor = '#ff3b5c';
-    ctx.shadowBlur = 12;
-    ctx.strokeRect(ox, oy, ow, oh);
-    ctx.fillStyle = 'rgba(255,59,92,0.12)';
-    ctx.fillRect(ox, oy, ow, oh);
 
-    ctx.fillStyle = '#ff3b5c';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.shadowBlur = 0;
-    ctx.fillText('⚠ 전방 주의', ox + ow/2, oy - 8);
+    if (obstacle.source === 'ai' && obstacle.detections && obstacle.detections.length > 0) {
+      // AI 결과: 각 객체마다 정확한 박스 그리기
+      obstacle.detections.forEach(d => {
+        const [bx, by, bw, bh] = d.bbox;
+        ctx.strokeStyle = '#ff3b5c';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = '#ff3b5c';
+        ctx.shadowBlur = 10;
+        ctx.strokeRect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgba(255,59,92,0.10)';
+        ctx.fillRect(bx, by, bw, bh);
+
+        // 라벨
+        const label = `${translateClass(d.class)} ${(d.score*100).toFixed(0)}%`;
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(bx, by - 22, ctx.measureText(label).width + 10, 20);
+        ctx.fillStyle = '#ff3b5c';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(label, bx + 5, by - 6);
+      });
+    } else {
+      // 픽셀 기반: 전체 전방 영역 박스
+      const ox = W * 0.25, oy = H * 0.20;
+      const ow = W * 0.50, oh = H * 0.25;
+      ctx.strokeStyle = '#ff3b5c';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#ff3b5c';
+      ctx.shadowBlur = 12;
+      ctx.strokeRect(ox, oy, ow, oh);
+      ctx.fillStyle = 'rgba(255,59,92,0.12)';
+      ctx.fillRect(ox, oy, ow, oh);
+      ctx.fillStyle = '#ff3b5c';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.shadowBlur = 0;
+      ctx.fillText('⚠ 전방 주의', ox + ow/2, oy - 8);
+    }
+
     ctx.restore();
   }
 
@@ -842,13 +976,16 @@ function provideFeedback(mode, deviation, obstacle) {
   const now = Date.now();
 
   if (mode === 'obstacle') {
-    // 장애물: 더블 진동 + 음성 (1초마다)
     if (now - state.lastVibTime > 1000) {
       vibrate([200, 100, 200]);
       state.lastVibTime = now;
     }
     if (now - state.lastSpeakTime > 2500) {
-      speak('전방 장애물 주의');
+      // AI 감지면 구체적인 객체명 읽어줌
+      const label = obstacle.labels && obstacle.labels.length > 0
+        ? `전방 ${obstacle.labels[0].split('(')[0]} 주의`
+        : '전방 장애물 주의';
+      speak(label);
       state.lastSpeakTime = now;
     }
     obsFlash.classList.add('show');
