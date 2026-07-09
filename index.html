@@ -8,7 +8,7 @@
 <title>길안내 — 점자블록 & 가상 유도선</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-<script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=b869ffff65c2133b5612cc751deb8dc2&libraries=services"></script>
+<script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=b869ffff65c2133b5612cc751deb8dc2&libraries=services&autoload=false"></script>
 
 <style>
   :root {
@@ -717,7 +717,7 @@ async function requestPermissions() {
     resizeCanvas();
     loadCocoModel();
     startGPS();
-    initMaps();
+    kakao.maps.load(() => initMaps());
   } catch(e) {
     alert('카메라 접근 실패: ' + e.message);
   }
