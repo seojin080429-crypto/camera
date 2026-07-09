@@ -8,6 +8,8 @@
 <title>길안내 — 점자블록 & 가상 유도선</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=b869ffff65c2133b5612cc751deb8dc2&libraries=services"></script>
+
 <style>
   :root {
     --bg: #0a0a0f;
@@ -44,7 +46,6 @@
   #video {
     width: 100%; height: 100%;
     object-fit: cover;
-    transform: scaleX(1);
   }
   #overlay-canvas {
     position: absolute;
@@ -96,6 +97,150 @@
     white-space: nowrap;
   }
 
+  /* ── 미니맵 ── */
+  #minimap-wrap {
+    position: fixed;
+    top: 60px;
+    right: 14px;
+    z-index: 25;
+    width: 160px;
+    height: 160px;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1.5px solid var(--border);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+    display: none; /* 경로 설정 전 숨김 */
+    flex-direction: column;
+    background: var(--surface);
+  }
+  #minimap-wrap.visible { display: flex; }
+
+  #minimap {
+    width: 100%;
+    flex: 1;
+  }
+
+  #minimap-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    background: rgba(10,10,15,0.85);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  #minimap-dist {
+    color: var(--accent-guide);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  /* 미니맵 확대 버튼 */
+  #minimap-toggle {
+    position: absolute;
+    top: 4px; right: 4px;
+    background: rgba(10,10,15,0.7);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding: 2px 5px;
+    cursor: pointer;
+    z-index: 2;
+    line-height: 1.4;
+  }
+
+  /* 전체 지도 패널 */
+  #fullmap-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    display: none;
+    flex-direction: column;
+    background: var(--bg);
+  }
+  #fullmap-panel.visible { display: flex; }
+
+  #fullmap-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--overlay-bg);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+  }
+  #fullmap-back {
+    font-size: 20px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+  }
+  #fullmap-title {
+    font-size: 15px;
+    font-weight: 700;
+    flex: 1;
+  }
+  #fullmap-dest-label {
+    font-size: 12px;
+    color: var(--accent-guide);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
+
+  #fullmap {
+    flex: 1;
+    width: 100%;
+  }
+
+  /* 전체 지도 하단 정보 바 */
+  #fullmap-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+    background: var(--overlay-bg);
+    border-top: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+    gap: 20px;
+  }
+  .fmap-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+  .fmap-stat-val {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent-guide);
+    line-height: 1;
+  }
+  .fmap-stat-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .fmap-divider {
+    width: 1px;
+    height: 36px;
+    background: var(--border);
+  }
+
   /* ── 하단 피드백 패널 ── */
   #feedback-panel {
     position: fixed;
@@ -130,8 +275,6 @@
     font-size: 24px;
     cursor: pointer;
     transition: all 0.15s;
-    position: relative;
-    overflow: hidden;
   }
   .dir-btn .label {
     font-size: 10px;
@@ -139,30 +282,10 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
-  .dir-btn.active-left {
-    border-color: var(--accent-warn);
-    color: var(--accent-warn);
-    background: rgba(255,159,28,0.12);
-    box-shadow: inset 0 0 20px rgba(255,159,28,0.1);
-  }
-  .dir-btn.active-right {
-    border-color: var(--accent-warn);
-    color: var(--accent-warn);
-    background: rgba(255,159,28,0.12);
-    box-shadow: inset 0 0 20px rgba(255,159,28,0.1);
-  }
-  .dir-btn.active-forward {
-    border-color: var(--accent-safe);
-    color: var(--accent-safe);
-    background: rgba(0,229,160,0.10);
-    box-shadow: inset 0 0 20px rgba(0,229,160,0.08);
-  }
-  .dir-btn.active-stop {
-    border-color: var(--accent-danger);
-    color: var(--accent-danger);
-    background: rgba(255,59,92,0.12);
-    box-shadow: inset 0 0 20px rgba(255,59,92,0.1);
-  }
+  .dir-btn.active-left  { border-color: var(--accent-warn);   color: var(--accent-warn);   background: rgba(255,159,28,0.12); }
+  .dir-btn.active-right { border-color: var(--accent-warn);   color: var(--accent-warn);   background: rgba(255,159,28,0.12); }
+  .dir-btn.active-forward { border-color: var(--accent-safe); color: var(--accent-safe);   background: rgba(0,229,160,0.10); }
+  .dir-btn.active-stop  { border-color: var(--accent-danger); color: var(--accent-danger); background: rgba(255,59,92,0.12); }
 
   #center-info {
     flex: 1.4;
@@ -217,10 +340,7 @@
     transition: opacity 0.2s, transform 0.1s;
   }
   #start-btn:active { transform: scale(0.97); }
-  #start-btn.running {
-    background: var(--accent-danger);
-    color: #fff;
-  }
+  #start-btn.running { background: var(--accent-danger); color: #fff; }
 
   .icon-btn {
     width: 48px; height: 48px;
@@ -233,16 +353,12 @@
     display: flex; align-items: center; justify-content: center;
     transition: all 0.15s;
   }
-  .icon-btn.active {
-    border-color: var(--accent-guide);
-    color: var(--accent-guide);
-    background: rgba(79,195,247,0.10);
-  }
+  .icon-btn.active { border-color: var(--accent-guide); color: var(--accent-guide); background: rgba(79,195,247,0.10); }
 
   /* ── 디버그 패널 ── */
   #debug-panel {
     position: fixed;
-    top: 60px; right: 12px;
+    top: 60px; left: 12px;
     z-index: 30;
     background: rgba(10,10,15,0.92);
     border: 1px solid var(--border);
@@ -258,7 +374,7 @@
   #debug-panel.visible { display: block; }
   #debug-panel span { color: var(--accent-guide); }
 
-  /* ── 장애물 경고 오버레이 ── */
+  /* ── 장애물 경고 ── */
   #obstacle-flash {
     position: fixed;
     inset: 0;
@@ -266,7 +382,6 @@
     pointer-events: none;
     opacity: 0;
     border: 4px solid var(--accent-danger);
-    border-radius: 0;
     transition: opacity 0.1s;
     box-shadow: inset 0 0 60px rgba(255,59,92,0.3);
   }
@@ -287,70 +402,100 @@
     text-align: center;
   }
   #init-screen.hidden { display: none; }
-  .init-icon {
-    font-size: 72px;
-    line-height: 1;
-  }
-  .init-title {
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: var(--text-primary);
-  }
-  .init-sub {
-    font-size: 14px;
-    color: var(--text-secondary);
-    line-height: 1.7;
-    max-width: 300px;
-  }
-  .init-features {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    width: 100%;
-    max-width: 340px;
-    text-align: left;
-  }
+  .init-icon { font-size: 72px; line-height: 1; }
+  .init-title { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  .init-sub { font-size: 14px; color: var(--text-secondary); line-height: 1.7; max-width: 300px; }
+  .init-features { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 340px; text-align: left; }
   .init-feature {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    border-radius: 12px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    font-size: 13px;
-    color: var(--text-secondary);
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    font-size: 13px; color: var(--text-secondary);
   }
   .init-feature-icon { font-size: 20px; flex-shrink: 0; }
   #permission-btn {
-    width: 100%;
-    max-width: 340px;
-    padding: 18px;
-    border-radius: 16px;
-    border: none;
-    background: var(--accent-guide);
-    color: #000;
-    font-size: 16px;
-    font-weight: 800;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    transition: opacity 0.2s;
+    width: 100%; max-width: 340px; padding: 18px;
+    border-radius: 16px; border: none;
+    background: var(--accent-guide); color: #000;
+    font-size: 16px; font-weight: 800; cursor: pointer;
   }
 
-  /* ── 진동 시각화 ── */
-  @keyframes pulse-left {
-    0%,100% { transform: translateX(0); }
-    30% { transform: translateX(-6px); }
-    60% { transform: translateX(-3px); }
+  /* ── 목적지 패널 ── */
+  #dest-panel {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 46; background: #12121a; border: 1px solid #1e1e2e;
+    border-radius: 20px; padding: 24px; width: 88%; max-width: 360px;
+    display: none;
   }
-  @keyframes pulse-right {
-    0%,100% { transform: translateX(0); }
-    30% { transform: translateX(6px); }
-    60% { transform: translateX(3px); }
+
+  /* ── 검색 결과 목록 ── */
+  #search-results {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 240px;
+    overflow-y: auto;
   }
-  #feedback-panel.vib-left { animation: pulse-left 0.35s ease-in-out; }
+  .search-result-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 11px 14px;
+    border-radius: 10px;
+    border: 1.5px solid var(--border);
+    background: var(--bg);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    text-align: left;
+  }
+  .search-result-item:active,
+  .search-result-item:hover {
+    border-color: var(--accent-guide);
+    background: rgba(79,195,247,0.07);
+  }
+  .sri-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .sri-addr {
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .sri-dist {
+    font-size: 11px;
+    color: var(--accent-guide);
+    font-weight: 600;
+  }
+
+  /* ── GPS 상태 ── */
+  #gps-status {
+    position: fixed; bottom: 185px; left: 50%; transform: translateX(-50%);
+    z-index: 19; font-size: 11px; color: #8888aa; font-weight: 600;
+    background: rgba(10,10,15,0.7); padding: 4px 12px; border-radius: 99px;
+    pointer-events: none;
+  }
+
+  /* 진동 애니메이션 */
+  @keyframes pulse-left  { 0%,100%{transform:translateX(0)} 30%{transform:translateX(-6px)} 60%{transform:translateX(-3px)} }
+  @keyframes pulse-right { 0%,100%{transform:translateX(0)} 30%{transform:translateX(6px)}  60%{transform:translateX(3px)}  }
+  #feedback-panel.vib-left  { animation: pulse-left  0.35s ease-in-out; }
   #feedback-panel.vib-right { animation: pulse-right 0.35s ease-in-out; }
+
+  /* 경로 재탐색 버튼 */
+  #reroute-btn {
+    position: fixed;
+    bottom: 195px; right: 14px;
+    z-index: 22;
+    background: var(--accent-warn);
+    border: none; border-radius: 12px;
+    color: #000; font-size: 12px; font-weight: 800;
+    padding: 8px 12px; cursor: pointer;
+    display: none;
+    box-shadow: 0 2px 12px rgba(255,159,28,0.4);
+  }
+  #reroute-btn.visible { display: block; }
 </style>
 </head>
 <body>
@@ -361,22 +506,10 @@
   <div class="init-title">점자블록 & 가상 유도선</div>
   <div class="init-sub">카메라로 보도를 분석해 진동·음성으로 실시간 방향을 안내합니다.</div>
   <div class="init-features">
-    <div class="init-feature">
-      <span class="init-feature-icon">🟡</span>
-      <div>점자블록 인식 → 선 이탈 시 좌/우 진동</div>
-    </div>
-    <div class="init-feature">
-      <span class="init-feature-icon">🔵</span>
-      <div>블록 없는 구간 → 가상 유도선 자동 생성</div>
-    </div>
-    <div class="init-feature">
-      <span class="init-feature-icon">🔴</span>
-      <div>전방 장애물 감지 → 경고 진동 + 음성</div>
-    </div>
-    <div class="init-feature">
-      <span class="init-feature-icon">📳</span>
-      <div>핸드폰 진동 + 음성 합성으로 안내</div>
-    </div>
+    <div class="init-feature"><span class="init-feature-icon">🟡</span><div>점자블록 인식 → 선 이탈 시 좌/우 진동</div></div>
+    <div class="init-feature"><span class="init-feature-icon">🔵</span><div>블록 없는 구간 → 가상 유도선 자동 생성</div></div>
+    <div class="init-feature"><span class="init-feature-icon">🗺️</span><div>목적지 설정 → 미니맵 + 경로 안내</div></div>
+    <div class="init-feature"><span class="init-feature-icon">🔴</span><div>전방 장애물 감지 → 경고 진동 + 음성</div></div>
   </div>
   <button id="permission-btn" onclick="requestPermissions()">카메라 권한 허용 후 시작</button>
 </div>
@@ -396,15 +529,54 @@
   <div id="status-text">대기 중</div>
   <div id="mode-badge">STANDBY</div>
 </div>
+
 <!-- 모델 로딩 상태 -->
 <div id="model-status-bar" style="
   position:fixed; top:52px; left:0; right:0; z-index:19;
   background:rgba(79,195,247,0.12); border-bottom:1px solid rgba(79,195,247,0.2);
   padding:5px 20px; font-size:12px; color:#4fc3f7; font-weight:600;
-  text-align:center; display:none;
-">
+  text-align:center; display:none;">
   <span id="model-status"></span>
 </div>
+
+<!-- ★ 미니맵 -->
+<div id="minimap-wrap">
+  <div id="minimap"></div>
+  <div id="minimap-header">
+    <span>📍 경로</span>
+    <span id="minimap-dist">—</span>
+  </div>
+  <button id="minimap-toggle" onclick="openFullMap()">⛶</button>
+</div>
+
+<!-- ★ 전체 지도 패널 -->
+<div id="fullmap-panel">
+  <div id="fullmap-header">
+    <button id="fullmap-back" onclick="closeFullMap()">←</button>
+    <div id="fullmap-title">경로 지도</div>
+    <div id="fullmap-dest-label">목적지 없음</div>
+  </div>
+  <div id="fullmap"></div>
+  <div id="fullmap-info">
+    <div class="fmap-stat">
+      <div class="fmap-stat-val" id="fm-dist">—</div>
+      <div class="fmap-stat-label">남은 거리</div>
+    </div>
+    <div class="fmap-divider"></div>
+    <div class="fmap-stat">
+      <div class="fmap-stat-val" id="fm-time">—</div>
+      <div class="fmap-stat-label">예상 시간</div>
+    </div>
+    <div class="fmap-divider"></div>
+    <div class="fmap-stat">
+      <div class="fmap-stat-val" id="fm-speed">—</div>
+      <div class="fmap-stat-label">현재 속도</div>
+    </div>
+  </div>
+</div>
+
+<!-- 경로 재탐색 버튼 -->
+<button id="reroute-btn" onclick="rerouteFromCurrent()">🔄 경로 재탐색</button>
 
 <!-- 디버그 패널 -->
 <div id="debug-panel">
@@ -412,44 +584,63 @@
   이탈량: <span id="d-dev">0</span>px<br>
   모드: <span id="d-mode">-</span><br>
   블록감지: <span id="d-block">-</span><br>
-  장애물: <span id="d-obs">없음</span>
+  장애물: <span id="d-obs">없음</span><br>
+  GPS이탈: <span id="d-gps-dev">—</span>m
 </div>
+
+<!-- 목적지 입력 패널 -->
+<div id="dest-panel">
+  <div style="font-size:16px;font-weight:800;margin-bottom:16px;">🔍 목적지 입력</div>
+  <div style="display:flex;gap:8px;margin-bottom:10px;">
+    <input id="dest-input" type="text" placeholder="장소 또는 주소 입력"
+      onkeydown="if(event.key==='Enter')handleDestInput()"
+      style="flex:1;padding:13px 14px;border-radius:12px;
+        border:1.5px solid #1e1e2e;background:#0a0a0f;
+        color:#f0f0f8;font-size:15px;">
+    <button onclick="handleDestInput()" style="
+      padding:13px 16px;border-radius:12px;border:none;
+      background:#4fc3f7;color:#000;font-size:14px;font-weight:800;cursor:pointer;white-space:nowrap;">검색</button>
+  </div>
+  <div id="search-results"></div>
+  <div id="search-loading" style="display:none;text-align:center;padding:12px 0;font-size:13px;color:#8888aa;">검색 중…</div>
+  <div style="display:flex;gap:10px;margin-top:10px;">
+    <button onclick="closeDestPanel()" style="
+      flex:1;padding:12px;border-radius:12px;border:1.5px solid #1e1e2e;
+      background:transparent;color:#8888aa;font-size:14px;font-weight:700;cursor:pointer;">닫기</button>
+  </div>
+</div>
+
+<!-- GPS 상태 -->
+<div id="gps-status">GPS 대기 중…</div>
 
 <!-- 하단 피드백 패널 -->
 <div id="feedback-panel">
   <div id="direction-row">
-    <button class="dir-btn" id="btn-left">
-      ◀
-      <span class="label">왼쪽</span>
-    </button>
+    <button class="dir-btn" id="btn-left">◀<span class="label">왼쪽</span></button>
     <div id="center-info">
-      <div id="deviation-bar-wrap">
-        <div id="deviation-bar"></div>
-      </div>
+      <div id="deviation-bar-wrap"><div id="deviation-bar"></div></div>
       <div id="deviation-label">경로 중심</div>
     </div>
-    <button class="dir-btn" id="btn-right">
-      ▶
-      <span class="label">오른쪽</span>
-    </button>
+    <button class="dir-btn" id="btn-right">▶<span class="label">오른쪽</span></button>
   </div>
   <div id="control-row">
-    <button class="icon-btn" id="debug-toggle-btn" onclick="toggleDebug()" title="디버그">🔍</button>
+    <button class="icon-btn" id="debug-toggle-btn" onclick="toggleDebug()">🔍</button>
     <button id="start-btn" onclick="toggleNavigation()">안내 시작</button>
-    <button class="icon-btn" id="voice-btn" onclick="toggleVoice()" title="음성">🔊</button>
+    <button class="icon-btn" onclick="document.getElementById('dest-panel').style.display='block';document.getElementById('dest-input').focus()">🗺️</button>
+    <button class="icon-btn" id="voice-btn" onclick="toggleVoice()">🔊</button>
   </div>
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 //  상태
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 const state = {
   running: false,
   voiceOn: true,
   debugOn: false,
-  mode: 'standby',          // 'standby' | 'braille' | 'virtual' | 'obstacle'
-  deviation: 0,             // -1.0 ~ +1.0 (음수=왼쪽, 양수=오른쪽)
+  mode: 'standby',
+  deviation: 0,
   obstacleDetected: false,
   lastVibTime: 0,
   lastSpeakTime: 0,
@@ -458,17 +649,44 @@ const state = {
   lastFpsTime: performance.now(),
   animId: null,
   stream: null,
-  // AI 모델
   cocoModel: null,
   modelLoading: false,
   modelReady: false,
-  lastDetections: [],       // 마지막 COCO-SSD 결과 캐시
-  detectionFrameCount: 0,   // AI는 매 N프레임마다만 실행
+  lastDetections: [],
+  detectionFrameCount: 0,
+  // GPS / 경로
+  gpsReady: false,
+  gpsWatchId: null,
+  currentPos: null,
+  speed: 0,                 // m/s
+  lastGpsPos: null,
+  lastGpsMoveTime: 0,
+  routePoints: [],
+  routeDeviation: 0,
+  destination: null,
+  destName: '',
+  totalDist: 0,             // 전체 경로 거리 (m)
+  remainDist: 0,            // 남은 거리 (m)
+  routeLoading: false,
+  lastGpsTime: 0,
+  // 카카오 지도 객체
+  miniMap: null,
+  fullMap: null,
+  myMarker: null,
+  myMarkerFull: null,
+  destMarker: null,
+  destMarkerFull: null,
+  routePolyline: null,
+  routePolylineFull: null,
+  passedPolyline: null,
+  passedPolylineFull: null,
+  closestIdx: 0,            // 경로상 현재 위치 인덱스
+  offRouteCount: 0,         // 이탈 프레임 카운터
 };
 
-// ═══════════════════════════════════════════════════════
-//  DOM 참조
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  DOM
+// ═══════════════════════════════════════════════════
 const video      = document.getElementById('video');
 const canvas     = document.getElementById('overlay-canvas');
 const ctx        = canvas.getContext('2d', { willReadFrequently: true });
@@ -483,17 +701,13 @@ const btnRight   = document.getElementById('btn-right');
 const obsFlash   = document.getElementById('obstacle-flash');
 const feedPanel  = document.getElementById('feedback-panel');
 
-// ═══════════════════════════════════════════════════════
-//  권한 요청 & 카메라 시작
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  권한 & 카메라
+// ═══════════════════════════════════════════════════
 async function requestPermissions() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false,
     });
     state.stream = stream;
@@ -501,8 +715,9 @@ async function requestPermissions() {
     await video.play();
     document.getElementById('init-screen').classList.add('hidden');
     resizeCanvas();
-    // 백그라운드에서 모델 로드 시작
     loadCocoModel();
+    startGPS();
+    initMaps();
   } catch(e) {
     alert('카메라 접근 실패: ' + e.message);
   }
@@ -521,51 +736,523 @@ async function loadCocoModel() {
   } catch(e) {
     state.modelLoading = false;
     updateModelStatus('AI 로드 실패 — 기본 감지 사용');
-    console.warn('COCO-SSD 로드 실패:', e);
   }
 }
 
 function updateModelStatus(msg) {
   const el  = document.getElementById('model-status');
   const bar = document.getElementById('model-status-bar');
-  if (el)  el.textContent  = msg;
+  if (el)  el.textContent = msg;
   if (bar) bar.style.display = msg ? 'block' : 'none';
+}
+
+// ═══════════════════════════════════════════════════
+//  카카오 지도 초기화
+// ═══════════════════════════════════════════════════
+function initMaps() {
+  // 기본 중심: 서울시청
+  const defaultCenter = new kakao.maps.LatLng(37.5665, 126.9780);
+
+  // 미니맵
+  state.miniMap = new kakao.maps.Map(document.getElementById('minimap'), {
+    center: defaultCenter,
+    level: 4,
+    draggable: false,
+    scrollwheel: false,
+    disableDoubleClickZoom: true,
+  });
+
+  // 전체 지도
+  state.fullMap = new kakao.maps.Map(document.getElementById('fullmap'), {
+    center: defaultCenter,
+    level: 4,
+  });
+
+  // 내 위치 마커 이미지 (파란 원)
+  const myImg = new kakao.maps.MarkerImage(
+    'https://t1.kakaocdn.net/localimg/localimages/07/mapapidoc/markerStar.png',
+    new kakao.maps.Size(24, 35)
+  );
+
+  state.myMarker = new kakao.maps.Marker({ map: state.miniMap, position: defaultCenter });
+  state.myMarkerFull = new kakao.maps.Marker({ map: state.fullMap, position: defaultCenter });
+
+  // 지도 컨트롤 (전체 지도에만)
+  state.fullMap.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+}
+
+// 마커 커스텀: 내 위치 (파란 점)
+function makeMyPosOverlay(map, lat, lng) {
+  return new kakao.maps.CustomOverlay({
+    map,
+    position: new kakao.maps.LatLng(lat, lng),
+    content: `<div style="
+      width:16px;height:16px;border-radius:50%;
+      background:#4fc3f7;border:3px solid #fff;
+      box-shadow:0 0 8px rgba(79,195,247,0.8);
+    "></div>`,
+    zIndex: 10,
+  });
+}
+
+// ═══════════════════════════════════════════════════
+//  GPS
+// ═══════════════════════════════════════════════════
+function startGPS() {
+  if (!navigator.geolocation) return;
+  state.gpsWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+
+      // 속도 계산
+      if (state.lastGpsPos) {
+        const d = haversine(state.lastGpsPos, newPos);
+        const dt = (Date.now() - state.lastGpsMoveTime) / 1000;
+        if (dt > 0) state.speed = d / dt;
+      }
+      state.lastGpsPos = state.currentPos;
+      state.lastGpsMoveTime = Date.now();
+      state.currentPos = newPos;
+      state.gpsReady = true;
+      state.lastGpsTime = Date.now();
+
+      if (state.routePoints.length > 1) {
+        updateRouteProgress();
+      }
+
+      updateMapsPosition(newPos.lat, newPos.lng);
+      updateGpsUI();
+    },
+    err => console.warn('GPS 오류:', err),
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+  );
+}
+
+// 경로 진행 상황 업데이트
+function updateRouteProgress() {
+  const pos = state.currentPos;
+  const route = state.routePoints;
+
+  // 현재 가장 가까운 경로 포인트 탐색 (closestIdx부터 탐색해 뒤로 안 감)
+  let minDist = Infinity;
+  let bestIdx = state.closestIdx;
+  const searchEnd = Math.min(route.length - 1, state.closestIdx + 50);
+  for (let i = state.closestIdx; i < searchEnd; i++) {
+    const d = haversine(pos, route[i]);
+    if (d < minDist) { minDist = d; bestIdx = i; }
+  }
+  state.closestIdx = bestIdx;
+
+  // 경로 이탈 판단
+  const offRoute = minDist > 20; // 20m 이상 이탈
+  if (offRoute) {
+    state.offRouteCount++;
+    if (state.offRouteCount >= 5) { // 5회 연속 이탈 → 재탐색 제안
+      document.getElementById('reroute-btn').classList.add('visible');
+    }
+  } else {
+    state.offRouteCount = 0;
+    document.getElementById('reroute-btn').classList.remove('visible');
+  }
+
+  // 남은 거리 계산 (현재 위치부터 목적지까지)
+  let remain = 0;
+  for (let i = bestIdx; i < route.length - 1; i++) {
+    remain += haversine(route[i], route[i+1]);
+  }
+  state.remainDist = remain;
+
+  // GPS 기반 이탈 방향 (좌/우)
+  if (bestIdx < route.length - 1) {
+    state.routeDeviation = calcRouteDeviation(pos, route);
+  }
+
+  updateRouteUI();
+
+  // 통과한 경로 폴리라인 업데이트 (진행된 부분 색상 변경)
+  updatePassedPolyline(bestIdx);
+
+  // 도착 감지 (20m 이내)
+  if (remain < 20) {
+    speak('목적지에 도착했습니다.');
+    clearRoute();
+  }
+}
+
+// 통과 경로 폴리라인
+function updatePassedPolyline(idx) {
+  const passed = state.routePoints.slice(0, idx + 1).map(p => new kakao.maps.LatLng(p.lat, p.lng));
+  if (passed.length < 2) return;
+
+  if (state.passedPolyline) state.passedPolyline.setMap(null);
+  if (state.passedPolylineFull) state.passedPolylineFull.setMap(null);
+
+  const style = { path: passed, strokeWeight: 5, strokeColor: '#8888aa', strokeOpacity: 0.5, strokeStyle: 'solid' };
+  state.passedPolyline = new kakao.maps.Polyline({ ...style, map: state.miniMap });
+  state.passedPolylineFull = new kakao.maps.Polyline({ ...style, map: state.fullMap });
+}
+
+// 지도에서 내 위치 업데이트
+function updateMapsPosition(lat, lng) {
+  if (!state.miniMap) return;
+  const latlng = new kakao.maps.LatLng(lat, lng);
+  state.myMarker.setPosition(latlng);
+  state.myMarkerFull.setPosition(latlng);
+  // 미니맵은 항상 현재 위치 중심
+  state.miniMap.setCenter(latlng);
+  // 전체 지도는 열려 있을 때만 따라감
+  if (document.getElementById('fullmap-panel').classList.contains('visible')) {
+    state.fullMap.panTo(latlng);
+  }
+}
+
+function updateRouteUI() {
+  const dist = state.remainDist;
+  const distStr = dist >= 1000 ? `${(dist/1000).toFixed(1)}km` : `${Math.round(dist)}m`;
+  // 도보 속도 1.2m/s 기준
+  const walkSpeed = Math.max(state.speed, 1.2);
+  const etaSec = dist / walkSpeed;
+  const etaStr = etaSec >= 3600
+    ? `${Math.floor(etaSec/3600)}h${Math.floor((etaSec%3600)/60)}m`
+    : etaSec >= 60
+    ? `${Math.floor(etaSec/60)}분`
+    : `${Math.round(etaSec)}초`;
+  const speedStr = `${(walkSpeed).toFixed(1)}m/s`;
+
+  document.getElementById('minimap-dist').textContent = distStr;
+  document.getElementById('fm-dist').textContent  = distStr;
+  document.getElementById('fm-time').textContent  = etaStr;
+  document.getElementById('fm-speed').textContent = speedStr;
+}
+
+function updateGpsUI() {
+  const el = document.getElementById('gps-status');
+  if (!el) return;
+  if (state.gpsReady) {
+    el.textContent = `📍 ${state.currentPos.lat.toFixed(5)}, ${state.currentPos.lng.toFixed(5)}`;
+    el.style.color = '#00e5a0';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  경로 요청 (Kakao Mobility)
+// ═══════════════════════════════════════════════════
+async function requestRoute(destLat, destLng, destName) {
+  if (!state.currentPos) { alert('GPS 신호를 기다리는 중입니다.'); return; }
+  state.routeLoading = true;
+  updateModelStatus('경로 계산 중…');
+
+  const originLng = state.currentPos.lng;
+  const originLat = state.currentPos.lat;
+
+  const applyRoute = (points, totalDist, isReal) => {
+    state.totalDist   = totalDist;
+    state.remainDist  = totalDist;
+    state.routePoints = points;
+    state.destination = { lat: destLat, lng: destLng };
+    state.destName    = destName || '목적지';
+    state.closestIdx  = 0;
+    drawRouteOnMap(points, destLat, destLng, destName);
+    document.getElementById('minimap-wrap').classList.add('visible');
+    document.getElementById('fullmap-dest-label').textContent = state.destName;
+    updateModelStatus(isReal ? `도보 경로 · ${(totalDist/1000).toFixed(1)}km` : '직선 경로로 안내합니다.');
+    setTimeout(() => updateModelStatus(''), 2500);
+    speak('경로 안내를 시작합니다.');
+    state.routeLoading = false;
+  };
+
+  const fallback = () => {
+    const points = [
+      { lat: originLat, lng: originLng },
+      { lat: destLat,   lng: destLng },
+    ];
+    applyRoute(points, haversine({ lat: originLat, lng: originLng }, { lat: destLat, lng: destLng }), false);
+  };
+
+  try {
+    // Kakao Mobility 도보 경로 API (3초 타임아웃)
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 3000);
+
+    // 도보 경로: /v1/waypoints/walking
+    const url = `https://apis-navi.kakaomobility.com/v1/waypoints/walking`;
+    const body = JSON.stringify({
+      origin:      { x: originLng, y: originLat },
+      destination: { x: destLng,   y: destLat   },
+    });
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'KakaoAK 7cab6c2d70d62cc8876affffc5bbdbe5',
+        'Content-Type': 'application/json',
+      },
+      body,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const data = await res.json();
+    let points = [], totalDist = 0;
+
+    if (data.routes && data.routes[0] && data.routes[0].result_code === 0) {
+      const route = data.routes[0];
+      totalDist = route.summary?.distance || 0;
+      (route.sections || []).forEach(sec => {
+        (sec.roads || []).forEach(road => {
+          const v = road.vertexes || [];
+          for (let i = 0; i < v.length - 1; i += 2) {
+            points.push({ lng: v[i], lat: v[i+1] });
+          }
+        });
+      });
+    }
+
+    if (points.length >= 2) {
+      applyRoute(points, totalDist, true);
+    } else {
+      fallback();
+    }
+  } catch(e) {
+    // AbortError(타임아웃) 또는 네트워크 오류 → 직선 폴백
+    fallback();
+  }
+}
+
+// 지도에 경로 + 마커 그리기
+function drawRouteOnMap(points, destLat, destLng, destName) {
+  if (!state.miniMap) return;
+  const latlngs = points.map(p => new kakao.maps.LatLng(p.lat, p.lng));
+
+  // 기존 경로 제거
+  if (state.routePolyline)     state.routePolyline.setMap(null);
+  if (state.routePolylineFull) state.routePolylineFull.setMap(null);
+  if (state.destMarker)        state.destMarker.setMap(null);
+  if (state.destMarkerFull)    state.destMarkerFull.setMap(null);
+
+  // 남은 경로 폴리라인 (파란색)
+  const polyStyle = {
+    path: latlngs,
+    strokeWeight: 6,
+    strokeColor: '#4fc3f7',
+    strokeOpacity: 0.85,
+    strokeStyle: 'solid',
+  };
+  state.routePolyline     = new kakao.maps.Polyline({ ...polyStyle, map: state.miniMap });
+  state.routePolylineFull = new kakao.maps.Polyline({ ...polyStyle, map: state.fullMap });
+
+  // 목적지 마커
+  const destPos = new kakao.maps.LatLng(destLat, destLng);
+  state.destMarker = new kakao.maps.Marker({ map: state.miniMap, position: destPos });
+  state.destMarkerFull = new kakao.maps.Marker({ map: state.fullMap, position: destPos });
+
+  // 목적지 라벨 (전체 지도)
+  new kakao.maps.InfoWindow({
+    content: `<div style="padding:5px 10px;font-size:12px;font-weight:700;color:#000;white-space:nowrap;">${destName || '목적지'}</div>`,
+    removable: false,
+  }).open(state.fullMap, state.destMarkerFull);
+
+  // 미니맵: 경로 전체가 보이도록 범위 조절
+  const bounds = new kakao.maps.LatLngBounds();
+  latlngs.forEach(ll => bounds.extend(ll));
+  bounds.extend(new kakao.maps.LatLng(state.currentPos.lat, state.currentPos.lng));
+  state.miniMap.setBounds(bounds, 10);
+
+  // 전체 지도도 경로 범위로
+  state.fullMap.setBounds(bounds, 30);
+}
+
+// 경로 재탐색
+function rerouteFromCurrent() {
+  if (!state.destination) return;
+  document.getElementById('reroute-btn').classList.remove('visible');
+  speak('경로를 재탐색합니다.');
+  requestRoute(state.destination.lat, state.destination.lng, state.destName);
+}
+
+// 경로 초기화
+function clearRoute() {
+  state.routePoints = [];
+  state.destination = null;
+  state.remainDist  = 0;
+  state.closestIdx  = 0;
+  document.getElementById('minimap-wrap').classList.remove('visible');
+  document.getElementById('reroute-btn').classList.remove('visible');
+  if (state.routePolyline)     state.routePolyline.setMap(null);
+  if (state.routePolylineFull) state.routePolylineFull.setMap(null);
+  if (state.passedPolyline)    state.passedPolyline.setMap(null);
+  if (state.passedPolylineFull) state.passedPolylineFull.setMap(null);
+  if (state.destMarker)        state.destMarker.setMap(null);
+  if (state.destMarkerFull)    state.destMarkerFull.setMap(null);
+}
+
+// 전체 지도 열기/닫기
+function openFullMap() {
+  document.getElementById('fullmap-panel').classList.add('visible');
+  setTimeout(() => {
+    kakao.maps.event.trigger(state.fullMap, 'resize');
+    if (state.currentPos) {
+      state.fullMap.setCenter(new kakao.maps.LatLng(state.currentPos.lat, state.currentPos.lng));
+    }
+  }, 100);
+}
+function closeFullMap() {
+  document.getElementById('fullmap-panel').classList.remove('visible');
+}
+
+// 목적지 패널 닫기
+function closeDestPanel() {
+  document.getElementById('dest-panel').style.display = 'none';
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('dest-input').value = '';
+}
+
+// 목적지 입력 처리 — 검색 결과 목록 표시
+function handleDestInput() {
+  const input = document.getElementById('dest-input').value.trim();
+  if (!input) return;
+
+  const resultsEl  = document.getElementById('search-results');
+  const loadingEl  = document.getElementById('search-loading');
+  resultsEl.innerHTML = '';
+  loadingEl.style.display = 'block';
+
+  const ps = new kakao.maps.services.Places();
+  const options = state.currentPos
+    ? { location: new kakao.maps.LatLng(state.currentPos.lat, state.currentPos.lng), sort: kakao.maps.services.SortBy.DISTANCE }
+    : {};
+
+  ps.keywordSearch(input, (result, status) => {
+    loadingEl.style.display = 'none';
+    if (status === kakao.maps.services.Status.OK && result.length > 0) {
+      result.slice(0, 8).forEach(place => {
+        const destLat  = parseFloat(place.y);
+        const destLng  = parseFloat(place.x);
+        const name     = place.place_name;
+        const addr     = place.road_address_name || place.address_name || '';
+        const distText = place.distance ? formatDist(parseInt(place.distance)) : '';
+
+        const item = document.createElement('button');
+        item.className = 'search-result-item';
+        item.innerHTML = `
+          <span class="sri-name">${name}</span>
+          ${addr ? `<span class="sri-addr">${addr}</span>` : ''}
+          ${distText ? `<span class="sri-dist">📍 ${distText}</span>` : ''}
+        `;
+        item.onclick = () => selectDestination(destLat, destLng, name);
+        resultsEl.appendChild(item);
+      });
+    } else {
+      resultsEl.innerHTML = `<div style="text-align:center;padding:16px;font-size:13px;color:#8888aa;">장소를 찾을 수 없어요.<br>다른 검색어를 입력해보세요.</div>`;
+    }
+  }, options);
+}
+
+function formatDist(m) {
+  return m >= 1000 ? `${(m/1000).toFixed(1)}km` : `${m}m`;
+}
+
+// 목적지 확정 → 경로 요청
+function selectDestination(destLat, destLng, destName) {
+  closeDestPanel();
+  if (state.gpsReady && state.currentPos) {
+    requestRoute(destLat, destLng, destName);
+  } else {
+    state.destination = { lat: destLat, lng: destLng };
+    state.destName    = destName;
+    state.routePoints = [{ lat: destLat, lng: destLng }];
+    setDestMarkerOnly(destLat, destLng, destName);
+    updateModelStatus('GPS 대기 중 — 목적지만 표시');
+    setTimeout(() => updateModelStatus(''), 3000);
+    speak(`목적지 ${destName} 설정됨. GPS 신호를 기다리는 중입니다.`);
+  }
+}
+
+// GPS 없을 때 목적지 마커만 표시
+function setDestMarkerOnly(lat, lng, name) {
+  if (!state.miniMap) return;
+  if (state.destMarker)     state.destMarker.setMap(null);
+  if (state.destMarkerFull) state.destMarkerFull.setMap(null);
+  const pos = new kakao.maps.LatLng(lat, lng);
+  state.destMarker     = new kakao.maps.Marker({ map: state.miniMap,  position: pos });
+  state.destMarkerFull = new kakao.maps.Marker({ map: state.fullMap,  position: pos });
+  new kakao.maps.InfoWindow({
+    content: `<div style="padding:5px 10px;font-size:12px;font-weight:700;color:#000;white-space:nowrap;">${name}</div>`,
+    removable: false,
+  }).open(state.fullMap, state.destMarkerFull);
+  state.miniMap.setCenter(pos);
+  state.fullMap.setCenter(pos);
+  state.miniMap.setLevel(5);
+  state.fullMap.setLevel(5);
+  document.getElementById('minimap-wrap').classList.add('visible');
+  document.getElementById('fullmap-dest-label').textContent = name;
+}
+
+// ═══════════════════════════════════════════════════
+//  거리 계산 (Haversine, 결과: m)
+// ═══════════════════════════════════════════════════
+function haversine(a, b) {
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const s = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+
+// GPS 이탈 방향 계산
+function calcRouteDeviation(pos, route) {
+  if (route.length < 2) return 0;
+  let minDist = Infinity, closestIdx = 0;
+  const end = Math.min(route.length - 1, state.closestIdx + 30);
+  for (let i = Math.max(0, state.closestIdx - 5); i < end; i++) {
+    const d = haversine(pos, route[i]);
+    if (d < minDist) { minDist = d; closestIdx = i; }
+  }
+  if (closestIdx >= route.length - 1) return 0;
+  const seg = { from: route[closestIdx], to: route[closestIdx + 1] };
+  const dx = seg.to.lng - seg.from.lng;
+  const dy = seg.to.lat - seg.from.lat;
+  const px = pos.lng - seg.from.lng;
+  const py = pos.lat - seg.from.lat;
+  const cross = dx * py - dy * px;
+  const len = Math.sqrt(dx*dx + dy*dy);
+  const signedDist = len > 0 ? cross / len : 0;
+  const distMeters = Math.abs(signedDist) * 111000;
+  document.getElementById('d-gps-dev').textContent = distMeters.toFixed(1);
+  return Math.sign(signedDist) * Math.min(distMeters / 3, 1);
+}
+
+function distToSegment(p, a, b) {
+  const dx = b.lng - a.lng, dy = b.lat - a.lat;
+  const lenSq = dx*dx + dy*dy;
+  let t = lenSq > 0 ? ((p.lng - a.lng)*dx + (p.lat - a.lat)*dy) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.sqrt((p.lng - a.lng - t*dx)**2 + (p.lat - a.lat - t*dy)**2);
 }
 
 function resizeCanvas() {
   canvas.width  = video.videoWidth  || window.innerWidth;
   canvas.height = video.videoHeight || window.innerHeight;
 }
-
 window.addEventListener('resize', resizeCanvas);
 video.addEventListener('loadedmetadata', resizeCanvas);
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 //  메인 루프
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 function toggleNavigation() {
   if (!state.stream) { alert('먼저 카메라 권한을 허용해주세요.'); return; }
   state.running = !state.running;
   startBtn.textContent = state.running ? '안내 중지' : '안내 시작';
   startBtn.classList.toggle('running', state.running);
-
-  if (state.running) {
-    speak('안내를 시작합니다.');
-    loop();
-  } else {
-    cancelAnimationFrame(state.animId);
-    state.mode = 'standby';
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    updateUI();
-  }
+  if (state.running) { speak('안내를 시작합니다.'); loop(); }
+  else { cancelAnimationFrame(state.animId); state.mode = 'standby'; ctx.clearRect(0, 0, canvas.width, canvas.height); updateUI(); }
 }
 
 function loop() {
   if (!state.running) return;
   analyze();
   state.animId = requestAnimationFrame(loop);
-
-  // FPS 계산
   state.frameCount++;
   const now = performance.now();
   if (now - state.lastFpsTime >= 1000) {
@@ -576,553 +1263,271 @@ function loop() {
   }
 }
 
-// ═══════════════════════════════════════════════════════
-//  핵심 분석 엔진
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  분석 엔진 (기존과 동일)
+// ═══════════════════════════════════════════════════
 function analyze() {
   const W = canvas.width, H = canvas.height;
   if (!W || !H) return;
-
-  // 1. 비디오 프레임을 캔버스에 그림
   ctx.drawImage(video, 0, 0, W, H);
   const imageData = ctx.getImageData(0, 0, W, H);
   const pixels = imageData.data;
-
-  // ── ROI: 하단 60%
   const roiTop = Math.floor(H * 0.35);
-
-  // 2. 점자블록 감지
-  const brailleResult = detectBrailleBlock(pixels, W, H, roiTop);
-
-  // 3. 보행 가능 영역
+  const brailleResult  = detectBrailleBlock(pixels, W, H, roiTop);
   const walkableResult = detectWalkablePath(pixels, W, H, roiTop);
-
-  // 4. 장애물 감지 (AI 우선, 없으면 픽셀 기반)
   state.detectionFrameCount++;
-  if (state.modelReady && state.detectionFrameCount % 5 === 0) {
-    // 비동기 추론 — 결과는 다음 프레임에 반영
-    runAIDetection();
-  }
+  if (state.modelReady && state.detectionFrameCount % 5 === 0) runAIDetection();
   const obstacleResult = buildObstacleResult(pixels, W, H);
-
-  // 5. 모드 결정
-  let deviation = 0;
-  let mode = 'virtual';
-
-  if (obstacleResult.detected) {
-    mode = 'obstacle';
-    deviation = 0;
-  } else if (brailleResult.detected && brailleResult.confidence > 0.3) {
+  let deviation = 0, mode = 'virtual';
+  if (obstacleResult.detected) { mode = 'obstacle'; deviation = 0; }
+  else if (brailleResult.detected && brailleResult.confidence > 0.3) {
     mode = 'braille';
-    deviation = brailleResult.deviation;
+    deviation = state.routePoints.length > 1 ? state.routeDeviation : brailleResult.deviation;
+  } else if (state.routePoints.length > 1 && state.gpsReady) {
+    mode = 'gps'; deviation = state.routeDeviation;
   } else {
-    mode = 'virtual';
-    deviation = walkableResult.deviation;
+    mode = 'virtual'; deviation = walkableResult.deviation;
   }
-
-  state.mode = mode;
-  state.deviation = deviation;
-  state.obstacleDetected = obstacleResult.detected;
-
-  // 6. 오버레이 그리기
+  state.mode = mode; state.deviation = deviation; state.obstacleDetected = obstacleResult.detected;
   drawOverlay(ctx, W, H, roiTop, brailleResult, walkableResult, obstacleResult, mode, deviation);
-
-  // 7. 피드백
   provideFeedback(mode, deviation, obstacleResult);
   updateUI();
-
-  // 디버그
-  const obsLabel = obstacleResult.detected
-    ? `⚠️ ${obstacleResult.labels ? obstacleResult.labels.join(', ') : '감지'}`
-    : '없음';
+  const obsLabel = obstacleResult.detected ? `⚠️ ${obstacleResult.labels ? obstacleResult.labels.join(', ') : '감지'}` : '없음';
   document.getElementById('d-dev').textContent   = (deviation * 100).toFixed(1) + '%';
   document.getElementById('d-mode').textContent  = mode + (state.modelReady ? ' [AI]' : ' [픽셀]');
-  document.getElementById('d-block').textContent = brailleResult.detected
-    ? `감지 (${(brailleResult.confidence*100).toFixed(0)}%)` : '없음';
+  document.getElementById('d-block').textContent = brailleResult.detected ? `감지 (${(brailleResult.confidence*100).toFixed(0)}%)` : '없음';
   document.getElementById('d-obs').textContent   = obsLabel;
 }
 
-// AI 비동기 추론 (결과를 state.lastDetections에 저장)
 async function runAIDetection() {
   if (!state.modelReady || !state.cocoModel) return;
-  try {
-    const predictions = await state.cocoModel.detect(video);
-    state.lastDetections = predictions;
-  } catch(e) {
-    // 추론 실패는 무시
-  }
+  try { state.lastDetections = await state.cocoModel.detect(video); } catch(e) {}
 }
 
-// 장애물 결과 합산 (AI 캐시 + 픽셀 폴백)
 function buildObstacleResult(pixels, W, H) {
-  // COCO-SSD 위험 클래스 (보행자 관점)
-  const dangerClasses = new Set([
-    'person','bicycle','car','motorcycle','bus','truck',
-    'traffic light','stop sign','dog','cat','bird',
-    'backpack','suitcase','handbag','umbrella'
-  ]);
-
-  // AI 결과 처리
+  const dangerClasses = new Set(['person','bicycle','car','motorcycle','bus','truck','traffic light','stop sign','dog','cat','bird','backpack','suitcase','handbag','umbrella']);
   if (state.modelReady && state.lastDetections.length > 0) {
-    const W = canvas.width, H = canvas.height;
-    const centerX1 = W * 0.15, centerX2 = W * 0.85;
-    const centerY2 = H * 0.75;  // 화면 상단 75% 안에 있는 것만
-
+    const cx1 = W*0.15, cx2 = W*0.85, cy2 = H*0.75;
     const dangers = state.lastDetections.filter(d => {
-      if (!dangerClasses.has(d.class)) return false;
-      if (d.score < 0.45) return false;
-      // 중앙 영역에 있는지 확인
-      const [bx, by, bw, bh] = d.bbox;
-      const cx = bx + bw / 2;
-      return cx > centerX1 && cx < centerX2 && by < centerY2;
+      if (!dangerClasses.has(d.class) || d.score < 0.45) return false;
+      const [bx,,bw,] = d.bbox; const cx = bx+bw/2;
+      return cx>cx1 && cx<cx2 && d.bbox[1]<cy2;
     });
-
-    if (dangers.length > 0) {
-      return {
-        detected: true,
-        source: 'ai',
-        labels: dangers.map(d => `${translateClass(d.class)}(${(d.score*100).toFixed(0)}%)`),
-        detections: dangers,
-      };
-    }
-    // AI가 아무것도 못 찾으면 픽셀 폴백 안 씀 (오탐 줄이기)
-    return { detected: false, source: 'ai', labels: [], detections: [] };
+    if (dangers.length > 0) return { detected:true, source:'ai', labels:dangers.map(d=>`${translateClass(d.class)}(${(d.score*100).toFixed(0)}%)`), detections:dangers };
+    return { detected:false, source:'ai', labels:[], detections:[] };
   }
-
-  // 모델 없을 때만 픽셀 기반 폴백
   const px = detectObstaclePixel(pixels, W, H);
-  return { detected: px.detected, source: 'pixel', labels: px.detected ? ['물체'] : [], detections: [] };
+  return { detected:px.detected, source:'pixel', labels:px.detected?['물체']:[], detections:[] };
 }
 
-// 한국어 클래스명
 function translateClass(cls) {
-  const map = {
-    person:'사람', bicycle:'자전거', car:'자동차', motorcycle:'오토바이',
-    bus:'버스', truck:'트럭', 'traffic light':'신호등', 'stop sign':'정지표지',
-    dog:'개', cat:'고양이', bird:'새', backpack:'가방', suitcase:'캐리어',
-    handbag:'핸드백', umbrella:'우산',
-  };
-  return map[cls] || cls;
+  return { person:'사람',bicycle:'자전거',car:'자동차',motorcycle:'오토바이',bus:'버스',truck:'트럭','traffic light':'신호등','stop sign':'정지표지',dog:'개',cat:'고양이',bird:'새',backpack:'가방',suitcase:'캐리어',handbag:'핸드백',umbrella:'우산' }[cls] || cls;
 }
 
-// ═══════════════════════════════════════════════════════
-//  점자블록 감지
-//  노란/황토 계열 픽셀을 찾고, x축 분포의 무게중심 계산
-// ═══════════════════════════════════════════════════════
 function detectBrailleBlock(pixels, W, H, roiTop) {
-  let totalWeight = 0;
-  let weightedX   = 0;
-  let count = 0;
-
-  // 샘플링 간격 (성능)
+  let totalWeight = 0, weightedX = 0, count = 0;
   const step = 4;
-
   for (let y = roiTop; y < H; y += step) {
     for (let x = 0; x < W; x += step) {
-      const i = (y * W + x) * 4;
-      const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
-
-      if (isYellowBraille(r, g, b)) {
-        // 가까운 행(아래쪽)에 더 높은 가중치
-        const weight = 1 + (y - roiTop) / (H - roiTop);
-        totalWeight += weight;
-        weightedX   += x * weight;
-        count++;
+      const i = (y*W+x)*4;
+      if (isYellowBraille(pixels[i], pixels[i+1], pixels[i+2])) {
+        const weight = 1 + (y-roiTop)/(H-roiTop);
+        totalWeight += weight; weightedX += x*weight; count++;
       }
     }
   }
-
-  const roiArea = ((H - roiTop) / step) * (W / step);
-  const density = count / roiArea;
-  const detected = density > 0.015;   // 1.5% 이상 픽셀이면 감지
-
-  let deviation = 0;
-  if (detected && totalWeight > 0) {
-    const cx = weightedX / totalWeight;
-    deviation = (cx / W - 0.5) * 2;   // -1 ~ +1
-  }
-
-  return { detected, confidence: Math.min(density / 0.06, 1), deviation, count };
+  const density = count / (((H-roiTop)/step)*(W/step));
+  const detected = density > 0.015;
+  const deviation = (detected && totalWeight > 0) ? ((weightedX/totalWeight)/W - 0.5)*2 : 0;
+  return { detected, confidence: Math.min(density/0.06, 1), deviation, count };
 }
 
 function isYellowBraille(r, g, b) {
-  // HSV 기반 노란-황토 범위 (조명 변화에 어느 정도 강인)
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  if (max < 80) return false;          // 너무 어두운 건 제외
-  const s = max === 0 ? 0 : (max - min) / max;
-  if (s < 0.25) return false;          // 채도가 낮으면 제외
-
-  // R이 G보다 크고, G가 B보다 많이 큰 = 노란/주황
-  return r > 120 && g > 90 && b < g * 0.8 && r >= g * 0.75 && g > b + 30;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  if (max < 80) return false;
+  if (max === 0 || (max-min)/max < 0.25) return false;
+  return r>120 && g>90 && b<g*0.8 && r>=g*0.75 && g>b+30;
 }
 
-// ═══════════════════════════════════════════════════════
-//  보행 가능 영역 세그멘테이션
-//  밝고 균일한 노면(콘크리트/아스팔트)을 찾아 centerline 추정
-// ═══════════════════════════════════════════════════════
 function detectWalkablePath(pixels, W, H, roiTop) {
-  // 수평 슬라이스별로 "걸을 수 있는" x 범위를 찾음
-  const slices = 8;
-  const sliceH = Math.floor((H - roiTop) / slices);
+  const slices = 8, sliceH = Math.floor((H-roiTop)/slices);
   const walkableSlices = [];
-
   for (let s = 0; s < slices; s++) {
-    const y = roiTop + s * sliceH + Math.floor(sliceH / 2);
-    let leftEdge = -1, rightEdge = W;
-
-    // 왼쪽 → 오른쪽: 걷기 어려운 영역(너무 어둡거나 엣지가 강한) 검출
-    for (let x = 0; x < W; x++) {
-      if (isWalkable(pixels, x, y, W)) { leftEdge = x; break; }
-    }
-    for (let x = W - 1; x >= 0; x--) {
-      if (isWalkable(pixels, x, y, W)) { rightEdge = x; break; }
-    }
-
-    if (leftEdge === -1) leftEdge = 0;
-    walkableSlices.push({ y, leftEdge, rightEdge, cx: (leftEdge + rightEdge) / 2 });
+    const y = roiTop + s*sliceH + Math.floor(sliceH/2);
+    let leftEdge = 0, rightEdge = W;
+    for (let x = 0; x < W; x++) { if (isWalkable(pixels, x, y, W)) { leftEdge=x; break; } }
+    for (let x = W-1; x >= 0; x--) { if (isWalkable(pixels, x, y, W)) { rightEdge=x; break; } }
+    walkableSlices.push({ y, leftEdge, rightEdge, cx:(leftEdge+rightEdge)/2 });
   }
-
-  // 하단 3개 슬라이스의 평균 중심을 현재 기준으로 삼음
   const recent = walkableSlices.slice(-3);
-  const avgCx = recent.reduce((s, r) => s + r.cx, 0) / recent.length;
-  const deviation = (avgCx / W - 0.5) * 2;
-
-  return { walkableSlices, deviation, avgCx };
+  const avgCx = recent.reduce((s,r)=>s+r.cx,0)/recent.length;
+  return { walkableSlices, deviation:(avgCx/W-0.5)*2, avgCx };
 }
 
 function isWalkable(pixels, x, y, W) {
-  const i = (y * W + x) * 4;
-  const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
-  const brightness = (r + g + b) / 3;
-  // 콘크리트/아스팔트: 밝기 60~220, 낮은 채도
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const saturation = max === 0 ? 0 : (max - min) / max;
-  return brightness > 50 && brightness < 230 && saturation < 0.35;
+  const i=(y*W+x)*4, r=pixels[i], g=pixels[i+1], b=pixels[i+2];
+  const brightness=(r+g+b)/3, max=Math.max(r,g,b), min=Math.min(r,g,b);
+  return brightness>50 && brightness<230 && (max===0?0:(max-min)/max)<0.35;
 }
 
-// ═══════════════════════════════════════════════════════
-//  장애물 감지 — 픽셀 기반 폴백 (AI 없을 때만 사용)
-// ═══════════════════════════════════════════════════════
 function detectObstaclePixel(pixels, W, H) {
-  const startY = Math.floor(H * 0.20);
-  const endY   = Math.floor(H * 0.45);
-  const startX = Math.floor(W * 0.25);
-  const endX   = Math.floor(W * 0.75);
-
-  let edgeSum = 0;
-  let samples = 0;
-  const step = 6;
-
-  for (let y = startY; y < endY - step; y += step) {
-    for (let x = startX; x < endX; x += step) {
-      const i = (y * W + x) * 4;
-      const j = ((y + step) * W + x) * 4;
-      const b1 = (pixels[i] + pixels[i+1] + pixels[i+2]) / 3;
-      const b2 = (pixels[j] + pixels[j+1] + pixels[j+2]) / 3;
-      edgeSum += Math.abs(b1 - b2);
+  const startY=Math.floor(H*0.20),endY=Math.floor(H*0.45),startX=Math.floor(W*0.25),endX=Math.floor(W*0.75);
+  let edgeSum=0,samples=0;
+  const step=6;
+  for (let y=startY; y<endY-step; y+=step) {
+    for (let x=startX; x<endX; x+=step) {
+      const i=(y*W+x)*4, j=((y+step)*W+x)*4;
+      edgeSum += Math.abs((pixels[i]+pixels[i+1]+pixels[i+2])/3 - (pixels[j]+pixels[j+1]+pixels[j+2])/3);
       samples++;
     }
   }
-
-  const avgEdge = samples > 0 ? edgeSum / samples : 0;
-  return { detected: avgEdge > 38, intensity: avgEdge };
+  return { detected: samples>0 && edgeSum/samples>38 };
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 //  오버레이 그리기
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 function drawOverlay(ctx, W, H, roiTop, braille, walkable, obstacle, mode, deviation) {
-  ctx.clearRect(0, 0, W, H); // 기존 오버레이 지우기 (비디오는 매 프레임 재드로우됨)
-
-  // 다시 비디오 프레임 그리기
+  ctx.clearRect(0, 0, W, H);
   ctx.drawImage(video, 0, 0, W, H);
-
-  // ── 점자블록 하이라이트
   if (braille.detected) {
-    ctx.save();
-    ctx.globalAlpha = 0.4;
-    // (실제 픽셀 단위 마스크 대신 전체 영역 틴트)
-    ctx.fillStyle = '#ffcc00';
-    // 실제로는 픽셀마다 칠하면 느리므로 간단한 glow만
-    ctx.globalAlpha = 0.15;
-    ctx.fillRect(0, roiTop, W, H - roiTop);
-    ctx.restore();
+    ctx.save(); ctx.globalAlpha = 0.15; ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(0, roiTop, W, H-roiTop); ctx.restore();
   }
-
-  // ── 가상 유도선 그리기
-  if (mode === 'braille' || mode === 'virtual') {
-    drawGuideLine(ctx, W, H, roiTop, walkable, mode, deviation);
-  }
-
-  // ── ROI 경계
-  ctx.save();
-  ctx.strokeStyle = 'rgba(79,195,247,0.25)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([8, 8]);
-  ctx.beginPath();
-  ctx.moveTo(0, roiTop);
-  ctx.lineTo(W, roiTop);
-  ctx.stroke();
-  ctx.restore();
-
-  // ── 장애물 경고 박스 (AI 바운딩 박스 or 픽셀 기반)
+  if (mode === 'braille' || mode === 'virtual') drawGuideLine(ctx, W, H, roiTop, walkable, mode, deviation);
+  ctx.save(); ctx.strokeStyle='rgba(79,195,247,0.25)'; ctx.lineWidth=1; ctx.setLineDash([8,8]);
+  ctx.beginPath(); ctx.moveTo(0,roiTop); ctx.lineTo(W,roiTop); ctx.stroke(); ctx.restore();
   if (obstacle.detected) {
     ctx.save();
-
-    if (obstacle.source === 'ai' && obstacle.detections && obstacle.detections.length > 0) {
-      // AI 결과: 각 객체마다 정확한 박스 그리기
+    if (obstacle.source==='ai' && obstacle.detections && obstacle.detections.length>0) {
       obstacle.detections.forEach(d => {
-        const [bx, by, bw, bh] = d.bbox;
-        ctx.strokeStyle = '#ff3b5c';
-        ctx.lineWidth = 2.5;
-        ctx.shadowColor = '#ff3b5c';
-        ctx.shadowBlur = 10;
-        ctx.strokeRect(bx, by, bw, bh);
-        ctx.fillStyle = 'rgba(255,59,92,0.10)';
-        ctx.fillRect(bx, by, bw, bh);
-
-        // 라벨
-        const label = `${translateClass(d.class)} ${(d.score*100).toFixed(0)}%`;
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(bx, by - 22, ctx.measureText(label).width + 10, 20);
-        ctx.fillStyle = '#ff3b5c';
-        ctx.font = 'bold 13px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText(label, bx + 5, by - 6);
+        const [bx,by,bw,bh]=d.bbox;
+        ctx.strokeStyle='#ff3b5c'; ctx.lineWidth=2.5; ctx.shadowColor='#ff3b5c'; ctx.shadowBlur=10;
+        ctx.strokeRect(bx,by,bw,bh); ctx.fillStyle='rgba(255,59,92,0.10)'; ctx.fillRect(bx,by,bw,bh);
+        const label=`${translateClass(d.class)} ${(d.score*100).toFixed(0)}%`;
+        ctx.shadowBlur=0; ctx.fillStyle='rgba(0,0,0,0.6)';
+        ctx.fillRect(bx,by-22,ctx.measureText(label).width+10,20);
+        ctx.fillStyle='#ff3b5c'; ctx.font='bold 13px sans-serif'; ctx.textAlign='left'; ctx.fillText(label,bx+5,by-6);
       });
     } else {
-      // 픽셀 기반: 전체 전방 영역 박스
-      const ox = W * 0.25, oy = H * 0.20;
-      const ow = W * 0.50, oh = H * 0.25;
-      ctx.strokeStyle = '#ff3b5c';
-      ctx.lineWidth = 3;
-      ctx.shadowColor = '#ff3b5c';
-      ctx.shadowBlur = 12;
-      ctx.strokeRect(ox, oy, ow, oh);
-      ctx.fillStyle = 'rgba(255,59,92,0.12)';
-      ctx.fillRect(ox, oy, ow, oh);
-      ctx.fillStyle = '#ff3b5c';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.shadowBlur = 0;
-      ctx.fillText('⚠ 전방 주의', ox + ow/2, oy - 8);
+      const ox=W*0.25,oy=H*0.20,ow=W*0.50,oh=H*0.25;
+      ctx.strokeStyle='#ff3b5c'; ctx.lineWidth=3; ctx.shadowColor='#ff3b5c'; ctx.shadowBlur=12;
+      ctx.strokeRect(ox,oy,ow,oh); ctx.fillStyle='rgba(255,59,92,0.12)'; ctx.fillRect(ox,oy,ow,oh);
+      ctx.fillStyle='#ff3b5c'; ctx.font='bold 14px sans-serif'; ctx.textAlign='center';
+      ctx.shadowBlur=0; ctx.fillText('⚠ 전방 주의',ox+ow/2,oy-8);
     }
-
     ctx.restore();
   }
-
-  // ── 이탈 표시 (중앙선에서 현재 위치)
-  const indicatorX = W/2 + deviation * W/2;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(indicatorX, H - 40, 8, 0, Math.PI * 2);
-  const devColor = Math.abs(deviation) < 0.2 ? '#00e5a0'
-                 : Math.abs(deviation) < 0.5 ? '#ff9f1c' : '#ff3b5c';
-  ctx.fillStyle = devColor;
-  ctx.shadowColor = devColor;
-  ctx.shadowBlur = 12;
-  ctx.fill();
-  ctx.restore();
+  const indicatorX = W/2 + deviation*W/2;
+  ctx.save(); ctx.beginPath(); ctx.arc(indicatorX,H-40,8,0,Math.PI*2);
+  const devColor=Math.abs(deviation)<0.2?'#00e5a0':Math.abs(deviation)<0.5?'#ff9f1c':'#ff3b5c';
+  ctx.fillStyle=devColor; ctx.shadowColor=devColor; ctx.shadowBlur=12; ctx.fill(); ctx.restore();
 }
 
 function drawGuideLine(ctx, W, H, roiTop, walkable, mode, deviation) {
-  // 슬라이스별 중심점을 연결한 곡선 유도선
-  const pts = walkable.walkableSlices.map(s => ({ x: s.cx, y: s.y }));
+  const pts = walkable.walkableSlices.map(s=>({x:s.cx,y:s.y}));
   if (pts.length < 2) return;
-
-  const color = mode === 'braille' ? '#ffcc00' : '#4fc3f7';
-  const alpha = mode === 'braille' ? 0.85 : 0.7;
-
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 5;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 16;
-  ctx.globalAlpha = alpha;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.setLineDash(mode === 'virtual' ? [16, 10] : []);
-
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i-1], curr = pts[i];
-    const cpx = (prev.x + curr.x) / 2;
-    const cpy = (prev.y + curr.y) / 2;
-    ctx.quadraticCurveTo(prev.x, prev.y, cpx, cpy);
+  const color = mode==='braille'?'#ffcc00':'#4fc3f7';
+  ctx.save(); ctx.strokeStyle=color; ctx.lineWidth=5; ctx.shadowColor=color; ctx.shadowBlur=16;
+  ctx.globalAlpha=mode==='braille'?0.85:0.7; ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.setLineDash(mode==='virtual'?[16,10]:[]);
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  for (let i=1; i<pts.length; i++) {
+    const p=pts[i-1],c=pts[i],cpx=(p.x+c.x)/2,cpy=(p.y+c.y)/2;
+    ctx.quadraticCurveTo(p.x,p.y,cpx,cpy);
   }
-  ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
-  ctx.stroke();
-
-  // 중심선 (흰색 얇은 선)
-  ctx.globalAlpha = 0.4;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([]);
-  ctx.beginPath();
-  ctx.moveTo(W/2, roiTop);
-  ctx.lineTo(W/2, H);
-  ctx.stroke();
-
+  ctx.lineTo(pts[pts.length-1].x,pts[pts.length-1].y); ctx.stroke();
+  ctx.globalAlpha=0.4; ctx.strokeStyle='#ffffff'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(W/2,roiTop); ctx.lineTo(W/2,H); ctx.stroke();
   ctx.restore();
 }
 
-// ═══════════════════════════════════════════════════════
-//  피드백 (진동 + 음성)
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  피드백
+// ═══════════════════════════════════════════════════
 function provideFeedback(mode, deviation, obstacle) {
   const now = Date.now();
-
   if (mode === 'obstacle') {
-    if (now - state.lastVibTime > 1000) {
-      vibrate([200, 100, 200]);
-      state.lastVibTime = now;
+    if (now-state.lastVibTime>1000) { vibrate([200,100,200]); state.lastVibTime=now; }
+    if (now-state.lastSpeakTime>2500) {
+      const label=obstacle.labels&&obstacle.labels.length>0?`전방 ${obstacle.labels[0].split('(')[0]} 주의`:'전방 장애물 주의';
+      speak(label); state.lastSpeakTime=now;
     }
-    if (now - state.lastSpeakTime > 2500) {
-      // AI 감지면 구체적인 객체명 읽어줌
-      const label = obstacle.labels && obstacle.labels.length > 0
-        ? `전방 ${obstacle.labels[0].split('(')[0]} 주의`
-        : '전방 장애물 주의';
-      speak(label);
-      state.lastSpeakTime = now;
-    }
-    obsFlash.classList.add('show');
-    return;
+    obsFlash.classList.add('show'); return;
   }
-
   obsFlash.classList.remove('show');
-
   const absD = Math.abs(deviation);
-
   if (absD < 0.15) {
-    // 정상 경로: 진동 없음
-    if (now - state.lastSpeakTime > 8000) {
-      speak(mode === 'braille' ? '점자블록을 따라 직진' : '가상 유도선 직진');
-      state.lastSpeakTime = now;
-    }
+    if (now-state.lastSpeakTime>8000) { speak(mode==='braille'?'점자블록을 따라 직진':'가상 유도선 직진'); state.lastSpeakTime=now; }
     return;
   }
-
-  // 이탈 감지
-  const dir    = deviation > 0 ? 'right' : 'left';
-  const severe = absD > 0.5;
-
-  // 진동 간격: 심할수록 짧게
-  const vibInterval = severe ? 500 : 900;
-  if (now - state.lastVibTime > vibInterval) {
-    if (severe) {
-      vibrate(dir === 'left' ? [150, 80, 150] : [80, 150, 80, 150, 80]);
-    } else {
-      vibrate(dir === 'left' ? [120] : [80, 60, 80]);
-    }
-    state.lastVibTime = now;
+  const dir=deviation>0?'right':'left', severe=absD>0.5;
+  if (now-state.lastVibTime>(severe?500:900)) {
+    vibrate(severe?(dir==='left'?[150,80,150]:[80,150,80,150,80]):(dir==='left'?[120]:[80,60,80]));
+    state.lastVibTime=now;
   }
-
-  // 음성 안내 (2초마다)
-  if (now - state.lastSpeakTime > 2000) {
-    speak(deviation < 0 ? '왼쪽으로 치우침' : '오른쪽으로 치우침');
-    state.lastSpeakTime = now;
-  }
+  if (now-state.lastSpeakTime>2000) { speak(deviation<0?'왼쪽으로 치우침':'오른쪽으로 치우침'); state.lastSpeakTime=now; }
 }
 
 function vibrate(pattern) {
-  if ('vibrate' in navigator) {
-    navigator.vibrate(pattern);
-  }
-  // 시각 피드백 (테스트용)
-  const dir = Array.isArray(pattern) && pattern.length > 2 ? 'left' : 'right';
-  feedPanel.classList.remove('vib-left', 'vib-right');
+  if ('vibrate' in navigator) navigator.vibrate(pattern);
+  feedPanel.classList.remove('vib-left','vib-right');
   void feedPanel.offsetWidth;
-  feedPanel.classList.add(dir === 'left' ? 'vib-left' : 'vib-right');
+  feedPanel.classList.add(Array.isArray(pattern)&&pattern.length>2?'vib-left':'vib-right');
 }
 
 const synth = window.speechSynthesis;
-let currentUtterance = null;
-
 function speak(text) {
   if (!state.voiceOn) return;
   if (synth.speaking) synth.cancel();
   const utt = new SpeechSynthesisUtterance(text);
-  utt.lang = 'ko-KR';
-  utt.rate = 1.3;
-  utt.pitch = 1;
-  utt.volume = 1;
+  utt.lang='ko-KR'; utt.rate=1.3; utt.pitch=1; utt.volume=1;
   synth.speak(utt);
-  currentUtterance = utt;
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 //  UI 업데이트
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
 function updateUI() {
   const { mode, deviation, obstacleDetected } = state;
   const absD = Math.abs(deviation);
-
-  // 상태 닷
-  statusDot.className = 'status-dot';
-  if (mode === 'obstacle' || obstacleDetected) {
-    statusDot.classList.add('danger');
-  } else if (absD > 0.25) {
-    statusDot.classList.add('warn');
-  }
-
-  // 텍스트
-  const modeLabels = {
-    standby: '대기 중',
-    braille: absD < 0.15 ? '점자블록 직진' : (deviation < 0 ? '왼쪽 치우침 — 우측으로' : '오른쪽 치우침 — 좌측으로'),
-    virtual: absD < 0.15 ? '가상 유도선 직진' : (deviation < 0 ? '왼쪽 이탈 — 우측으로' : '오른쪽 이탈 — 좌측으로'),
-    obstacle: '⚠ 전방 장애물 감지',
+  statusDot.className = '';
+  if (mode==='obstacle'||obstacleDetected) statusDot.classList.add('danger');
+  else if (absD>0.25) statusDot.classList.add('warn');
+  const modeLabels={
+    standby:'대기 중',
+    braille:absD<0.15?'점자블록 직진':(deviation<0?'왼쪽 치우침 — 우측으로':'오른쪽 치우침 — 좌측으로'),
+    virtual:absD<0.15?'가상 유도선 직진':(deviation<0?'왼쪽 이탈 — 우측으로':'오른쪽 이탈 — 좌측으로'),
+    gps:absD<0.15?'GPS 경로 직진':(deviation<0?'경로 왼쪽 이탈 — 우측으로':'경로 오른쪽 이탈 — 좌측으로'),
+    obstacle:'⚠ 전방 장애물 감지',
   };
-  statusText.textContent = modeLabels[mode] || '분석 중';
-
-  const badgeLabels = { standby: 'STANDBY', braille: 'BRAILLE', virtual: 'VIRTUAL', obstacle: 'OBSTACLE' };
-  modeBadge.textContent = badgeLabels[mode] || mode.toUpperCase();
-
-  // 이탈 바 (중앙 = 50%, 이탈 시 이동)
-  const barPercent = 30 + deviation * 40;  // 30~70% 범위에서 움직임
-  const barColor = absD < 0.15 ? 'var(--accent-safe)'
-                 : absD < 0.4  ? 'var(--accent-warn)'
-                 :               'var(--accent-danger)';
-  devBar.style.left = `${Math.max(0, Math.min(60, barPercent))}%`;
-  devBar.style.background = barColor;
-  devLabel.textContent = absD < 0.12 ? '경로 중심' : (deviation < 0 ? '← 왼쪽 이탈' : '오른쪽 이탈 →');
-
-  // 방향 버튼
-  btnLeft.className  = 'dir-btn';
-  btnRight.className = 'dir-btn';
-  if (mode === 'obstacle') {
-    btnLeft.classList.add('active-stop');
-    btnRight.classList.add('active-stop');
-  } else if (deviation < -0.15) {
-    btnLeft.classList.add('active-left');
-  } else if (deviation > 0.15) {
-    btnRight.classList.add('active-right');
-  } else {
-    btnLeft.classList.add('active-forward');
-    btnRight.classList.add('active-forward');
-  }
+  statusText.textContent = modeLabels[mode]||'분석 중';
+  modeBadge.textContent  = {standby:'STANDBY',braille:'BRAILLE',virtual:'VIRTUAL',gps:'GPS',obstacle:'OBSTACLE'}[mode]||mode.toUpperCase();
+  const barPct = 30+deviation*40;
+  const barColor=absD<0.15?'var(--accent-safe)':absD<0.4?'var(--accent-warn)':'var(--accent-danger)';
+  devBar.style.left=`${Math.max(0,Math.min(60,barPct))}%`; devBar.style.background=barColor;
+  devLabel.textContent=absD<0.12?'경로 중심':(deviation<0?'← 왼쪽 이탈':'오른쪽 이탈 →');
+  btnLeft.className='dir-btn'; btnRight.className='dir-btn';
+  if (mode==='obstacle') { btnLeft.classList.add('active-stop'); btnRight.classList.add('active-stop'); }
+  else if (deviation<-0.15) btnLeft.classList.add('active-left');
+  else if (deviation>0.15)  btnRight.classList.add('active-right');
+  else { btnLeft.classList.add('active-forward'); btnRight.classList.add('active-forward'); }
 }
 
-// ═══════════════════════════════════════════════════════
-//  토글 함수들
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  토글
+// ═══════════════════════════════════════════════════
 function toggleDebug() {
-  state.debugOn = !state.debugOn;
-  document.getElementById('debug-panel').classList.toggle('visible', state.debugOn);
-  document.getElementById('debug-toggle-btn').classList.toggle('active', state.debugOn);
+  state.debugOn=!state.debugOn;
+  document.getElementById('debug-panel').classList.toggle('visible',state.debugOn);
+  document.getElementById('debug-toggle-btn').classList.toggle('active',state.debugOn);
 }
-
 function toggleVoice() {
-  state.voiceOn = !state.voiceOn;
-  document.getElementById('voice-btn').textContent = state.voiceOn ? '🔊' : '🔇';
-  document.getElementById('voice-btn').classList.toggle('active', state.voiceOn);
-  if (state.voiceOn) speak('음성 안내 켜짐');
-  else synth.cancel();
+  state.voiceOn=!state.voiceOn;
+  document.getElementById('voice-btn').textContent=state.voiceOn?'🔊':'🔇';
+  document.getElementById('voice-btn').classList.toggle('active',state.voiceOn);
+  if (state.voiceOn) speak('음성 안내 켜짐'); else synth.cancel();
 }
-
-// 초기 음성 설정
 document.getElementById('voice-btn').classList.add('active');
 </script>
 </body>
